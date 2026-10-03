@@ -31,7 +31,7 @@ jobs:
 
       - name: Create release app token
         id: release-app-token
-        uses: octo-sts/action@b6a4c9287012d2e1d2477d4f25d6f35de668e2d3 # main
+        uses: octo-sts/action@2ea63db88c2be45e0d1dd46ecb820021eec01439 # main
         with:
           domain: ${{ vars.OCTO_STS_DOMAIN }}
           scope: ${{ format('{0}/.github', github.repository_owner) }}
