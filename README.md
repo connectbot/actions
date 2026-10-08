@@ -1,6 +1,8 @@
-# release-action
+# ConnectBot actions
 
 Issue-driven releases for Gradle projects. Prepares a release PR, then tags the release and advances the target branch after approval and passing CI. Your repository's CI publishes the artifacts.
+
+This repository contains shared ConnectBot automation. Its current actions handle release preparation, publication, and maintenance branches.
 
 ## Set up your repository
 
@@ -51,20 +53,20 @@ permissions:
 jobs:
   prepare:
     if: github.event.label.name == 'release:prepare'
-    uses: connectbot/release-action/.github/workflows/prepare-release.yml@main
+    uses: connectbot/actions/.github/workflows/prepare-release.yml@main
     with:
       tag_prefix: "v"
 
   publish:
     if: github.event.label.name == 'release:publish'
-    uses: connectbot/release-action/.github/workflows/publish-release.yml@main
+    uses: connectbot/actions/.github/workflows/publish-release.yml@main
     with:
       tag_prefix: "v"
 
   # Optional: create maintenance branches using the Release branch issue form.
   branch:
     if: github.event.label.name == 'release:branch'
-    uses: connectbot/release-action/.github/workflows/release-branch.yml@main
+    uses: connectbot/actions/.github/workflows/release-branch.yml@main
 ```
 
 Set `tag_prefix` to `""` in both jobs for unprefixed tags, and match it in Gradle's `tagTemplate`. The prepare workflow also accepts `java_version` (default `"17"`), `java_distribution` (default `"zulu"`), and `gradle_no_push_prop` (default `"release.noPush"`).
@@ -77,7 +79,7 @@ The Octo STS policies must issue tokens for only the target repository with thes
 | `<repository>-release-publish` | `contents: write`, `pull_requests: read`, `checks: read`, `statuses: read`, `issues: write` |
 | `<repository>-release-branch` | `contents: write`, `issues: write` |
 
-Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/release-action`. Put `repositories: [REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
+Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/actions`. Put `repositories: [REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
 
 ## Hook up artifact publishing
 
