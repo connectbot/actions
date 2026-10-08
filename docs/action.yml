@@ -1,0 +1,71 @@
+name: Versioned Kotlin documentation
+description: Build a versioned Dokka site with API change reports and release notes.
+author: ConnectBot
+branding:
+  icon: book-open
+  color: blue
+inputs:
+  repository:
+    description: Source checkout containing its development branch and full tag history.
+    default: ${{ github.workspace }}
+  config:
+    description: Repository-relative or absolute documentation configuration path.
+    default: .github/docs.json
+  output:
+    description: New output directory outside the source checkout.
+    default: ${{ runner.temp }}/docs-site
+  logs:
+    description: Build log directory outside the public site.
+    default: ${{ runner.temp }}/docs-logs
+  retry-failed:
+    description: Retry previously failed tagged documentation builds.
+    default: 'false'
+  require-ci:
+    description: Require configured CI admission even when not publishing.
+    default: 'false'
+  publish:
+    description: Push the generated documentation archive to the configured remote.
+    default: 'false'
+outputs:
+  ready:
+    description: Whether verified development documentation is available for deployment.
+    value: ${{ steps.docs.outputs.ready }}
+  failures:
+    description: Number of missing, failed, pending, or stale documentation versions.
+    value: ${{ steps.docs.outputs.failures }}
+  output:
+    description: Absolute path to the assembled site.
+    value: ${{ steps.docs.outputs.output }}
+  logs:
+    description: Absolute path to the build logs.
+    value: ${{ steps.docs.outputs.logs }}
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: '3.12'
+    - name: Install publisher dependencies
+      shell: bash
+      env:
+        DOCS_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        python -m venv "$RUNNER_TEMP/docs-action-venv"
+        "$RUNNER_TEMP/docs-action-venv/bin/python" -m pip install --disable-pip-version-check \
+          --requirement "$DOCS_ACTION_PATH/scripts/requirements.txt"
+    - name: Assemble versioned documentation
+      id: docs
+      shell: bash
+      env:
+        DOCS_ACTION_PATH: ${{ github.action_path }}
+        DOCS_REPOSITORY: ${{ inputs.repository }}
+        DOCS_CONFIG: ${{ inputs.config }}
+        DOCS_OUTPUT: ${{ inputs.output }}
+        DOCS_LOGS: ${{ inputs.logs }}
+        DOCS_RETRY_FAILED: ${{ inputs.retry-failed }}
+        DOCS_REQUIRE_CI: ${{ inputs.require-ci }}
+        DOCS_PUBLISH: ${{ inputs.publish }}
+      run: |
+        export PATH="${RUNNER_TEMP}/docs-action-venv/bin:${PATH}"
+        python "$DOCS_ACTION_PATH/scripts/run_action.py"

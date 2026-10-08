@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "site": {
+    "title": "ConnectBot Telnet",
+    "base_url": "https://telnetlib.connectbot.org"
+  },
+  "repository": {
+    "slug": "connectbot/cbtelnet"
+  },
+  "build": {
+    "project": ".",
+    "gradle_overlay": true,
+    "arguments": [
+      "--dependency-verification",
+      "strict"
+    ],
+    "overlays": [
+      ".github/scripts/templates",
+      "gradle/verification-metadata.xml"
+    ],
+    "probe": "telnetlib/build.gradle.kts"
+  },
+  "api": {
+    "telnetlib": "Telnet",
+    "telnetlib-ktor": "Ktor backend"
+  },
+  "ci": {
+    "jobs": [
+      "Required checks"
+    ]
+  }
+}
