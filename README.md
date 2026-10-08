@@ -1,8 +1,18 @@
 # ConnectBot actions
 
-Issue-driven releases for Gradle projects. Prepares a release PR, then tags the release and advances the target branch after approval and passing CI. Your repository's CI publishes the artifacts.
+Shared GitHub Actions for ConnectBot releases, versioned documentation, and reviewed stale issues.
 
-This repository contains shared ConnectBot automation. Its current actions handle release preparation, publication, and maintenance branches.
+| Automation | Entry points | Guide |
+| --- | --- | --- |
+| Releases | `prepare/`, `publish/`, `branch/`; reusable release workflows | Setup and usage below |
+| Documentation | `connectbot/actions/docs@REF` | [Documentation action](docs/README.md) |
+| Stale issues | `connectbot/actions/stale-issues@REF`; reusable `stale-issues.yml` workflow | [Stale issue policy](stale-issues/README.md) |
+
+Use a reviewed immutable commit in place of `REF`. Each consumer owns its triggers, permissions, and project configuration. See the [repository rename checklist](docs/rename-to-actions.md) when migrating existing release consumers.
+
+## Releases
+
+Issue-driven releases for Gradle projects. Prepares a release PR, then tags the release and advances the target branch after approval and passing CI. Your repository's CI publishes the artifacts.
 
 ## Set up your repository
 
@@ -157,3 +167,16 @@ Expect `OPEN`, `isDraft: true`, `MERGEABLE`, an `APPROVED` review on the current
 The person applying a release label must have maintain or admin access. To create a maintenance branch, open a **Release branch** issue and add `release:branch`.
 
 Draft PRs disable GitHub's merge button but still allow reviews. Someone with write access can mark them ready, so this is an accidental-merge guard, not an access restriction. If publishing fails before pushing the tag, resolve the reported blockers and use **Re-run failed jobs**, or remove and reapply `release:publish`.
+
+## Run tests locally
+
+From the repository root:
+
+```sh
+python3 -m unittest discover -s tests -v
+python3 -m pip install --requirement docs/scripts/requirements.txt
+python3 -m unittest discover -s docs/scripts/tests -v
+node stale-issues/stale-issues.test.mts
+```
+
+The stale checker runs directly with Node 24 or newer. Each action has its own CI checks; documentation CI also exercises the composite action with a local source fixture.

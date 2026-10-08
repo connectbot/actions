@@ -1,0 +1,33 @@
+name: Close reviewed stale issues
+description: Warn and close inactive issues after a project member has reviewed them.
+author: ConnectBot
+inputs:
+  github-token:
+    description: Token with issues write permission in the calling repository.
+    default: ${{ github.token }}
+  dry-run:
+    description: Preview decisions without changing issues.
+    default: 'true'
+outputs:
+  summary:
+    description: JSON counts of marked, closed, unmarked and skipped issues.
+    value: ${{ steps.stale.outputs.result }}
+runs:
+  using: composite
+  steps:
+    - name: Process reviewed issues
+      id: stale
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      env:
+        STALE_ACTION_PATH: ${{ github.action_path }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          if (!['true', 'false'].includes(process.env.DRY_RUN)) {
+            throw new Error('dry-run must be true or false');
+          }
+          const { pathToFileURL } = require('node:url');
+          const scriptUrl = pathToFileURL(`${process.env.STALE_ACTION_PATH}/stale-issues.mts`);
+          const { run } = await import(scriptUrl.href);
+          return await run({ github, context, core, dryRun: process.env.DRY_RUN === 'true' });

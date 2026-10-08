@@ -1,0 +1,20 @@
+name: Close reviewed stale issues
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: Preview decisions without changing issues.
+        type: boolean
+        default: true
+permissions:
+  contents: read
+  issues: write
+jobs:
+  stale:
+    name: Process reviewed issues
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: $/stale-issues
+        with:
+          dry-run: ${{ inputs.dry_run }}

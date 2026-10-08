@@ -1,0 +1,91 @@
+{
+  "defaults": {
+    "repository": {
+      "url": "https://github.com/{slug}",
+      "development_ref": "main",
+      "development_label": "{development_ref}"
+    },
+    "archive": {
+      "remote": "origin",
+      "branch": "gh-pages",
+      "author_name": "github-actions[bot]",
+      "author_email": "41898282+github-actions[bot]@users.noreply.github.com"
+    },
+    "tags": {
+      "minimum": null
+    },
+    "changelog": "CHANGELOG.md",
+    "build": {
+      "command": [
+        "python3",
+        "{publisher}/docs_build.py",
+        "--repo",
+        "{repo}",
+        "--checkout",
+        "{checkout}",
+        "--output",
+        "{output}",
+        "--config",
+        "{config}",
+        "--commit",
+        "{commit}",
+        "--version",
+        "{version}"
+      ],
+      "timeout": 1800,
+      "inputs": [],
+      "publisher_inputs": [
+        "docs_build.py",
+        "docs_config.py"
+      ]
+    }
+  },
+  "dokka": {
+    "project": ".",
+    "tasks": [
+      "{project_task}dokkaGeneratePublicationHtml",
+      "{project_task}dokkaGenerateMarkdown"
+    ],
+    "arguments": [
+      "--no-configuration-cache",
+      "--no-daemon",
+      "--console=plain",
+      "-PdocsSourceCommit={commit}",
+      "-PdocsVersion={version}",
+      "-PdocsRepositoryUrl={repository_url}"
+    ],
+    "html": "{project_dir}build/dokka/html",
+    "markdown": "{project_dir}build/dokka/markdown",
+    "probe": {
+      "path": "{project_dir}build.gradle.kts",
+      "pattern": "\\bdokka\\b"
+    },
+    "gradle_overlay": {
+      "start": "// BEGIN SITE DOCUMENTATION\n",
+      "end": "// END SITE DOCUMENTATION",
+      "import_prefixes": [
+        "import org.jetbrains.dokka."
+      ],
+      "replacements": {
+        "alias(libs.plugins.dokka) apply false": "alias(libs.plugins.dokka)"
+      }
+    },
+    "command": [
+      "./gradlew"
+    ]
+  },
+  "api": {
+    "path": "{module}/api.txt",
+    "source_path": "{module}/src/main"
+  },
+  "ci": {
+    "workflow": "ci.yml",
+    "event": "push",
+    "required_for_publish": true
+  },
+  "ci_step": {
+    "conclusions": [
+      "success"
+    ]
+  }
+}

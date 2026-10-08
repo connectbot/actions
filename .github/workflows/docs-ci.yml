@@ -1,0 +1,52 @@
+name: Documentation action CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    name: Test publisher
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --requirement docs/scripts/requirements.txt
+      - name: Test publisher and Action interface
+        run: python -m unittest discover -s docs/scripts/tests -v
+      - uses: jdx/mise-action@2d8d4cafcbd33be2ea37d2b6f5ad595363d1f1ca # v5.1.1
+        with:
+          install: true
+      # actionlint currently rejects GitHub's supported self-repository syntax.
+      - name: Check workflow syntax
+        run: mise exec -- actionlint -ignore 'specifying action "\$/[^" ]+" in invalid format because ref is missing'
+      - name: Create local source fixture
+        run: python docs/scripts/tests/create_action_fixture.py "$RUNNER_TEMP/docs-action-source"
+      - name: Exercise composite Action
+        id: docs
+        uses: ./docs
+        with:
+          repository: ${{ runner.temp }}/docs-action-source
+          output: ${{ runner.temp }}/docs-action-smoke-site
+          logs: ${{ runner.temp }}/docs-action-smoke-logs
+      - name: Verify Action outputs and preview publication
+        env:
+          DOCS_READY: ${{ steps.docs.outputs.ready }}
+          DOCS_FAILURES: ${{ steps.docs.outputs.failures }}
+          DOCS_OUTPUT: ${{ steps.docs.outputs.output }}
+          DOCS_LOGS: ${{ steps.docs.outputs.logs }}
+        run: |
+          test "$DOCS_READY" = true
+          test "$DOCS_FAILURES" = 0
+          test -f "$DOCS_OUTPUT/0.1.0/index.html"
+          test -f "$DOCS_OUTPUT/main/index.md"
+          test -d "$DOCS_LOGS"
+          test -z "$(git -C "$RUNNER_TEMP/docs-action-source-archive.git" for-each-ref)"
