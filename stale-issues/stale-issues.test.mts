@@ -68,6 +68,13 @@ test('milestones, keep-open, locked issues and pull requests are exempt', () => 
   ]) assert.equal(decide(issue(override), [review()], now), 'skip');
 });
 
+test('feature labels exempt issues from stale warnings and closure regardless of case', () => {
+  for (const name of ['feature', 'Feature', 'FEATURE']) {
+    assert.equal(decide(issue({ labels: [{ name }] }), [review()], now), 'skip');
+    assert.equal(decide(stale({ labels: [{ name: 'stale' }, { name }] }), [review(), warning()], now), 'skip');
+  }
+});
+
 test('warn only after 180 days, including ordinary contributor replies', () => {
   assert.equal(decide(issue({ updated_at: ago(179) }), [review()], now), 'skip');
   assert.equal(decide(issue({ updated_at: ago(180) }), [review()], now), 'mark');
@@ -139,6 +146,8 @@ test('unreviewed, milestone and recently active issues receive no writes', async
     { current: stale(), comments: [warning()] },
     { current: issue(), comments: [] },
     { current: stale({ milestone: { number: 13 } }), comments: [review(), warning()] },
+    { current: issue({ labels: [{ name: 'feature' }] }) },
+    { current: stale({ labels: [{ name: 'stale' }, { name: 'feature' }] }), comments: [review(), warning()] },
     { current: issue({ updated_at: ago(1) }), comments: [] },
   ]) assert.deepEqual((await execute(options)).calls, []);
 });

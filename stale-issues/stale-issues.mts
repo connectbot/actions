@@ -13,7 +13,7 @@ const MEMBERS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 function isExempt(issue) {
   return issue.state !== 'open' || issue.pull_request || issue.locked ||
     issue.milestone ||
-    issue.labels.some(label => label.name.toLowerCase() === 'keep-open');
+    issue.labels.some(label => ['keep-open', 'feature'].includes(label.name.toLowerCase()));
 }
 
 function isWarning(comment) {

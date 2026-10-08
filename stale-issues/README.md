@@ -2,7 +2,7 @@
 
 An issue is eligible only after a human owner, member, or collaborator has commented. Unreviewed issues are skipped indefinitely. Reviewed issues receive a stale label and warning after 180 days without activity, then close after another 30 days without activity. New activity removes the stale label and restarts the cycle.
 
-Issues with milestones, the `keep-open` label, locked issues, and pull requests are exempt. Creating an issue as a member does not count as review; a member comment is required. Closure requires this action's own warning comment, not just a manually applied stale label.
+Issues with milestones, the `keep-open` or `feature` labels (case-insensitive), locked issues, and pull requests are exempt. Creating an issue as a member does not count as review; a member comment is required. Closure requires this action's own warning comment, not just a manually applied stale label.
 
 ## Scheduled usage
 
