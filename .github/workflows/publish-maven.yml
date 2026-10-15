@@ -165,13 +165,13 @@ jobs:
 
       - name: Attest build provenance
         id: provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: ${{ runner.temp }}/subjects/${{ matrix.module }}.sha256
 
       - name: Attest SBOM
         id: sbom
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.subjects.outputs.jar }}
           sbom-path: ${{ steps.subjects.outputs.sbom }}
