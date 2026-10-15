@@ -1,0 +1,6 @@
+paths:
+  .github/workflows/publish-maven.yml:
+    ignore:
+      # GitHub.com documents job.workflow_sha, but actionlint 1.7.12 predates it.
+      # https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context
+      - 'property "workflow_sha" is not defined in object type'

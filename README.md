@@ -5,6 +5,7 @@ Shared GitHub Actions for ConnectBot releases, versioned documentation, and revi
 | Automation | Entry points | Guide |
 | --- | --- | --- |
 | Releases | `prepare/`, `publish/`, `branch/`; reusable release workflows | Setup and usage below |
+| Maven publications | Reusable `publish-maven.yml` workflow | [Attested publication](publication/README.md) |
 | Documentation | `connectbot/actions/docs@REF` | [Documentation action](docs/README.md) |
 | Stale issues | `connectbot/actions/stale-issues@REF`; reusable `stale-issues.yml` workflow | [Stale issue policy](stale-issues/README.md) |
 
@@ -92,6 +93,10 @@ The Octo STS policies must issue tokens for only the target repository with thes
 Each policy should exactly match the caller's OIDC subject and `audience: <OCTO_STS_DOMAIN>`, and constrain `job_workflow_ref` to its matching workflow in `connectbot/actions`. Put `repositories: [REPOSITORY]` in every policy. Also restrict organization issuers to `https://token.actions.githubusercontent.com` in `.github/chainguard/trusted-token-issuers.yaml`.
 
 ## Hook up artifact publishing
+
+For JVM libraries, use the [attested Maven publication workflow](publication/README.md)
+to generate and distribute SLSA provenance and SBOM attestations. The manual
+publishing steps below describe the existing publishing path without attestations.
 
 In your existing CI workflow:
 

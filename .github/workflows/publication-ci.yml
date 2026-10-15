@@ -1,0 +1,40 @@
+name: Maven publication tests
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'publication/**'
+      - '.github/workflows/publish-maven.yml'
+      - '.github/workflows/publication-ci.yml'
+      - '.github/actionlint.yaml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'publication/**'
+      - '.github/workflows/publish-maven.yml'
+      - '.github/workflows/publication-ci.yml'
+      - '.github/actionlint.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Java 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: zulu
+          java-version: '17'
+      - name: Validate workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/publish-maven.yml .github/workflows/publication-ci.yml
+      - name: Test contracts, tamper rejection, and real Maven/GPG snapshot deployment
+        env:
+          PUBLICATION_INTEGRATION: '1'
+        run: python3 -m unittest discover -s publication/tests -v
