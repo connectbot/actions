@@ -1,0 +1,263 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
+name: Attested Maven publication
+
+on:
+  workflow_call:
+    inputs:
+      maven_group:
+        description: Expected Maven group of every staged module
+        type: string
+        required: true
+      modules:
+        description: Comma-separated artifact IDs staged under build/publication/
+        type: string
+        required: true
+      caller_workflow:
+        description: Only this source workflow may initiate publication
+        type: string
+        default: .github/workflows/ci.yml
+      tag_prefix:
+        description: Release tag prefix
+        type: string
+        default: v
+    secrets:
+      MAVEN_GPG_PRIVATE_KEY:
+        required: true
+      MAVEN_GPG_KEYID:
+        required: false
+      MAVEN_GPG_PASSPHRASE:
+        required: false
+      SONATYPE_USERNAME:
+        required: true
+      SONATYPE_PASSWORD:
+        required: true
+
+# Serialize snapshots across branches as well as releases; never interrupt uploads.
+concurrency:
+  group: maven-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PUBLICATION_GROUP: ${{ inputs.maven_group }}
+  PUBLICATION_MODULES: ${{ inputs.modules }}
+  PUBLICATION_CALLER_WORKFLOW: ${{ inputs.caller_workflow }}
+  PUBLICATION_TAG_PREFIX: ${{ inputs.tag_prefix }}
+
+jobs:
+  build:
+    name: Build unsigned publications
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.context.outputs.version }}
+      modules: ${{ steps.context.outputs.modules }}
+      artifact-prefix: ${{ steps.context.outputs.artifact-prefix }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - name: Checkout source at the triggering commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout builder at its platform-reported revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: connectbot/actions
+          ref: ${{ job.workflow_sha }}
+          path: builder
+          sparse-checkout: publication/scripts
+          persist-credentials: false
+
+      - name: Check publication authority and configuration
+        id: context
+        env:
+          PUBLICATION_BUILDER_SHA: ${{ job.workflow_sha }}
+        run: python3 builder/publication/scripts/publication.py context source
+
+      - name: Verify release tag
+        if: steps.context.outputs.publish == 'true' && startsWith(github.ref, 'refs/tags/')
+        working-directory: source
+        run: |
+          test "$(git cat-file -t "${GITHUB_REF_NAME}")" = tag
+          git fetch origin \
+            '+refs/heads/main:refs/remotes/origin/main' \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git branch -r --contains "$GITHUB_SHA" | grep -E 'origin/(main|release/[0-9]+\.[0-9]+)$'
+
+      - name: Set up Java 17
+        if: steps.context.outputs.publish == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Set up Gradle without restored caches
+        if: steps.context.outputs.publish == 'true'
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          validate-wrappers: true
+          dependency-graph: disabled
+          cache-disabled: true
+
+      - name: Build and stage exact Maven outputs
+        if: steps.context.outputs.publish == 'true'
+        working-directory: source
+        run: ./gradlew --dependency-verification strict --no-build-cache stageMavenPublication
+
+      - name: Preserve immutable unsigned publications
+        if: steps.context.outputs.publish == 'true'
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: unsigned-${{ steps.context.outputs.artifact-prefix }}
+          path: source/build/publication/
+          if-no-files-found: error
+          retention-days: 30
+
+  attest:
+    name: Attest ${{ matrix.module }} in isolation
+    needs: build
+    if: needs.build.outputs.artifact-id != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.build.outputs.modules) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      MODULE: ${{ matrix.module }}
+      PUBLICATION_MATRIX_MODULE: ${{ matrix.module }}
+      STAGING: ${{ github.workspace }}/staged-publication
+    steps:
+      - name: Checkout trusted helpers, never build outputs as executable code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: connectbot/actions
+          ref: ${{ job.workflow_sha }}
+          path: builder
+          sparse-checkout: publication/scripts
+          persist-credentials: false
+
+      - name: Download only this run's immutable build artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          merge-multiple: true
+          path: ${{ env.STAGING }}
+
+      - name: Validate files and calculate subject digests
+        id: subjects
+        env:
+          PUBLICATION_BUILDER_SHA: ${{ job.workflow_sha }}
+        run: python3 builder/publication/scripts/publication.py prepare "$STAGING" "$VERSION" --checksums-dir "$RUNNER_TEMP/subjects"
+
+      - name: Attest build provenance
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-checksums: ${{ runner.temp }}/subjects/${{ matrix.module }}.sha256
+
+      - name: Attest SBOM
+        id: sbom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: ${{ steps.subjects.outputs.jar }}
+          sbom-path: ${{ steps.subjects.outputs.sbom }}
+
+      - name: Attach standard Sigstore bundles and verify this module
+        env:
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          SBOM: ${{ steps.sbom.outputs.bundle-path }}
+          PUBLICATION_BUILDER_SHA: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/attested"
+          cp -R "$STAGING/$MODULE" "$RUNNER_TEMP/attested/$MODULE"
+          cp "$PROVENANCE" "$RUNNER_TEMP/attested/$MODULE/$MODULE-$VERSION-provenance.json"
+          cp "$SBOM" "$RUNNER_TEMP/attested/$MODULE/$MODULE-$VERSION-sbom-attestation.json"
+          python3 builder/publication/scripts/publication.py verify "$RUNNER_TEMP/attested" "$VERSION" --module "$MODULE"
+
+      - name: Preserve attested publications
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attested-${{ needs.build.outputs.artifact-prefix }}-${{ matrix.module }}
+          path: ${{ runner.temp }}/attested/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish verified bytes
+    needs: [build, attest]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+      STAGING: ${{ github.workspace }}/staged-publication
+    steps:
+      - name: Checkout trusted publisher only
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: connectbot/actions
+          ref: ${{ job.workflow_sha }}
+          path: builder
+          sparse-checkout: publication/scripts
+          persist-credentials: false
+
+      - name: Resolve this run's exact matrix artifact IDs
+        id: artifacts
+        env:
+          PUBLICATION_ARTIFACT_PREFIX: ${{ needs.build.outputs.artifact-prefix }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 builder/publication/scripts/publication.py artifacts .
+
+      - name: Download this run's attested files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          artifact-ids: ${{ steps.artifacts.outputs.ids }}
+          merge-multiple: true
+          path: ${{ env.STAGING }}
+
+      - name: Set up Java for the standalone snapshot uploader
+        if: endsWith(needs.build.outputs.version, '-SNAPSHOT')
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: zulu
+          java-version: '17'
+
+      - name: Verify, sign and publish without executing the project build
+        env:
+          PUBLICATION_BUILDER_SHA: ${{ job.workflow_sha }}
+          GH_TOKEN: ${{ github.token }}
+          MAVEN_GPG_PRIVATE_KEY: ${{ secrets.MAVEN_GPG_PRIVATE_KEY }}
+          MAVEN_GPG_KEYID: ${{ secrets.MAVEN_GPG_KEYID }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        run: python3 builder/publication/scripts/publication.py publish "$STAGING" "$VERSION"
+
+      - name: Preserve publication records on success or failure
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: publication-records-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/publication-*/deployment-id.txt
+            ${{ runner.temp }}/publication-*/central-bundle.zip
+          if-no-files-found: ignore
+          retention-days: 30
