@@ -517,7 +517,7 @@ def main():
         with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
             outputs.write(f"manifest_sha256={sha}\n")
         shutil.copyfile(args.bundle, args.out / "final.sigstore.json")
-        r.publish_draft(args.out)
+        r.publish_draft(args.out, args.policy)
     else:
         manifest = verify_handoff(args.out, args.manifest_sha256, args.policy)
         if args.command == "github":
