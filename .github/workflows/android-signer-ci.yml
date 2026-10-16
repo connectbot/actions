@@ -1,19 +1,14 @@
 name: Android signer tests
 on:
   push:
-    branches: [main]
-    paths:
-      - 'android-signer/**'
-      - '.github/workflows/android-signer-ci.yml'
+    branches: [main, android-signer-v1]
   pull_request:
-    branches: [main]
-    paths:
-      - 'android-signer/**'
-      - '.github/workflows/android-signer-ci.yml'
+    branches: [main, android-signer-v1]
 permissions:
   contents: read
 jobs:
   test:
+    name: Android signer contract tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,4 +21,4 @@ jobs:
       - name: Verify action contracts and adversarial publishing cases
         run: python3 -m unittest discover -s android-signer/tests -v
       - name: Validate workflow
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/android-signer-ci.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/android-signer-ci.yml .github/workflows/android-attest.yml .github/workflows/android-finalize.yml .github/workflows/android-publish.yml

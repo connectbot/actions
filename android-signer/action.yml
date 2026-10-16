@@ -3,14 +3,13 @@ description: Prepare build metadata or verify and publish attested Hermit signin
 author: ConnectBot
 inputs:
   command:
-    description: 'Operation: build-info, prepare, seal, verify, github, or play.'
+    description: 'Operation: policy, build-info, prepare, seal, verify, github, or play.'
     required: true
   out:
-    description: Output directory, or verified publishing handoff for verify/github/play.
+    description: Output directory or handoff; output file path for policy.
     required: true
   policy:
-    description: Independently approved public signer policy in the consumer checkout.
-    default: .github/signer-policy.json
+    description: Explicit central policy snapshot produced by the policy command.
   profile:
     description: Android flavor for build-info (oss or google).
   version-code-file:
