@@ -463,14 +463,24 @@ def upload(repo, release_id, name, data, content_type="application/octet-stream"
         run("gh", "api", "--hostname", "github.com", "--method", "POST", "-H", f"Content-Type: {content_type}", f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={quote(name, safe='')}", "--input", tmp.name)
 
 
-def publish_draft(out):
+def publish_draft(out, policy_path):
+    policy = load(policy_path.read_bytes())
+    validate_policy(policy)
     repo = os.environ["GITHUB_REPOSITORY"]
+    require(repo == policy["repository"], "draft repository differs from policy")
+    finalizer = policy["finalizer"]
     release = load((out / "release.json").read_bytes())
     metadata = load((out / "verification.json").read_bytes())
     # Both freshly emitted bundles must verify before anything enters the final draft.
     for profile in metadata["profiles"]:
         for kind in ("apk", "aab"):
-            run("gh", "attestation", "verify", out / profile / f"app-signed.{kind}", "--bundle", out / "final.sigstore.json", "--repo", repo, "--signer-workflow", f"{repo}/.github/workflows/release-attest.yml", "--deny-self-hosted-runners")
+            verified = load(run("gh", "attestation", "verify", out / profile / f"app-signed.{kind}",
+                "--bundle", out / "final.sigstore.json", "--repo", repo,
+                "--signer-workflow", f"{finalizer['repository']}/{finalizer['workflow']}",
+                "--source-digest", os.environ["GITHUB_SHA"], "--source-ref", os.environ["GITHUB_REF"],
+                "--deny-self-hosted-runners", "--format", "json"))
+            require(len(verified) == 1, "ambiguous final draft provenance")
+            verify_finalizer_certificate(policy, verified[0]["verificationResult"]["signature"]["certificate"])
     tag = release["tag_name"]
     marker = f"Verified Android signing; source run {metadata['source_run']}/{metadata['source_attempt']}"
     matches = [r for r in rows(f"repos/{repo}/releases") if r["tag_name"] == tag]
@@ -503,7 +513,8 @@ def main():
         require(args.policy and args.source_run and args.source_attempt and args.tools, "policy/source run/attempt/tools required")
         prepare(args.policy, args.source_run, args.source_attempt, args.out, args.tools.resolve())
     else:
-        publish_draft(args.out)
+        require(args.policy, "central policy snapshot required")
+        publish_draft(args.out, args.policy)
 
 
 if __name__ == "__main__":
