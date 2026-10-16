@@ -1,0 +1,53 @@
+name: Verify and publish Android signer artifacts
+description: Prepare build metadata or verify and publish attested Hermit signing results.
+author: ConnectBot
+inputs:
+  command:
+    description: 'Operation: build-info, prepare, seal, verify, github, or play.'
+    required: true
+  out:
+    description: Output directory, or verified publishing handoff for verify/github/play.
+    required: true
+  policy:
+    description: Independently approved public signer policy in the consumer checkout.
+    default: .github/signer-policy.json
+  profile:
+    description: Android flavor for build-info (oss or google).
+  version-code-file:
+    description: Version code file for build-info.
+  source-run:
+    description: Successful source workflow run ID for prepare.
+  source-attempt:
+    description: Source workflow attempt for prepare.
+  tools:
+    description: Directory for pinned Android reference tools for prepare.
+  bundle:
+    description: Final Sigstore attestation bundle for seal.
+  manifest-sha256:
+    description: Expected release manifest hash for verify/github/play.
+  report:
+    description: Publication result path for github/play.
+outputs:
+  manifest_sha256:
+    description: Verified publishing manifest digest emitted by seal.
+    value: ${{ steps.signer.outputs.manifest_sha256 }}
+runs:
+  using: composite
+  steps:
+    - name: Run Android signing helper
+      id: signer
+      shell: bash
+      env:
+        SIGNER_ACTION_PATH: ${{ github.action_path }}
+        SIGNER_COMMAND: ${{ inputs.command }}
+        SIGNER_OUT: ${{ inputs.out }}
+        SIGNER_POLICY: ${{ inputs.policy }}
+        SIGNER_PROFILE: ${{ inputs.profile }}
+        SIGNER_VERSION_CODE_FILE: ${{ inputs.version-code-file }}
+        SIGNER_SOURCE_RUN: ${{ inputs.source-run }}
+        SIGNER_SOURCE_ATTEMPT: ${{ inputs.source-attempt }}
+        SIGNER_TOOLS: ${{ inputs.tools }}
+        SIGNER_BUNDLE: ${{ inputs.bundle }}
+        SIGNER_MANIFEST_SHA256: ${{ inputs.manifest-sha256 }}
+        SIGNER_REPORT: ${{ inputs.report }}
+      run: python3 "$SIGNER_ACTION_PATH/scripts/run_action.py"
