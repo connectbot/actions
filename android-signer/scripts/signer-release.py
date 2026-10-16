@@ -84,6 +84,31 @@ def pin_file(repository, repository_id, path, commit, pins):
     require(digest(base64.b64decode(value["content"].replace("\n", ""), validate=True)) in pins, "unapproved workflow/helper contents")
 
 
+def verify_workflow_identity(builder):
+    require(builder.get("authorization") == "workflow-identity" and not builder.get("sha256") and not builder.get("helpers"), "identity policy cannot contain ignored pins")
+    require(len(builder["refs"]) == 1 and builder["refs"][0].startswith("refs/heads/"), "one trusted builder branch required")
+    meta = api(f"repos/{builder['repository']}")
+    require(meta["id"] == builder["repository_id"] and meta["visibility"] == "public", "trusted workflow repository differs")
+    branch = builder["refs"][0][len("refs/heads/"):]
+    require(re.fullmatch(r"[A-Za-z0-9_.\-/]+", branch) and all(part not in ("", ".", "..") for part in branch.split("/")), "unsafe builder branch")
+    require(api(f"repos/{builder['repository']}/branches/{branch}")["protected"] is True, "trusted workflow branch is unprotected")
+
+
+def finalizer_identity(policy):
+    return policy.get("finalizer", {"repository": policy["repository"], "repository_id": policy["repository_id"],
+        "workflow": ".github/workflows/release-attest.yml", "refs": ["refs/heads/main"]})
+
+
+def verify_finalizer_certificate(policy, certificate):
+    finalizer = finalizer_identity(policy)
+    if finalizer.get("authorization") == "workflow-identity":
+        verify_workflow_identity(finalizer)
+        expected = f"https://github.com/{finalizer['repository']}/{finalizer['workflow']}@{finalizer['refs'][0]}"
+        require(certificate["buildSignerURI"] == expected and valid_hash(certificate["buildSignerDigest"], 40), "final attestation builder differs")
+        return expected, certificate["buildSignerDigest"]
+    return f"https://github.com/{policy['repository']}/.github/workflows/release-attest.yml@refs/heads/main", os.environ.get("GITHUB_SHA")
+
+
 def validate_policy(policy):
     require(policy.get("version") == 2 and policy.get("visibility") == "public", "version 2 public release policy required")
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", policy["repository"]), "invalid repository")
@@ -173,10 +198,14 @@ def verify_provenance(path, bundle, policy, source_run, summary):
     require(predicate["runDetails"]["builder"]["id"] == summary["builder"] and predicate["runDetails"]["metadata"]["invocationId"] == invocation, "predicate invocation differs")
     require(any(d.get("uri") == f"git+{uri}@{workflow['ref']}" and d.get("digest", {}).get("gitCommit") == source_run["head_sha"] for d in definition["resolvedDependencies"]), "source dependency differs")
     require(any(s.get("digest", {}).get("sha256") == digest(path.read_bytes()) for s in statement["subject"]), "upstream subject differs")
-    pin_file(policy["repository"], policy["repository_id"], workflow["path"], source_run["head_sha"], policy["callers"][workflow["path"]])
-    pin_file(builder["repository"], builder["repository_id"], builder["workflow"], summary["builder_commit"], builder["sha256"])
-    for name, pins in builder["helpers"].items():
-        pin_file(builder["repository"], builder["repository_id"], name, summary["builder_commit"], pins)
+    if builder.get("authorization") == "workflow-identity":
+        require(builder["repository_id"] != policy["repository_id"] and builder["repository"] != policy["repository"], "trusted builder must be separate from source")
+        verify_workflow_identity(builder)
+    else:
+        pin_file(policy["repository"], policy["repository_id"], workflow["path"], source_run["head_sha"], policy["callers"][workflow["path"]])
+        pin_file(builder["repository"], builder["repository_id"], builder["workflow"], summary["builder_commit"], builder["sha256"])
+        for name, pins in builder["helpers"].items():
+            pin_file(builder["repository"], builder["repository_id"], name, summary["builder_commit"], pins)
 
 
 def unpack(data):
@@ -365,10 +394,21 @@ def final_predicate(policy, source_run_id, source_attempt, metadata, summaries, 
     finalizer = os.environ["GITHUB_WORKFLOW_REF"]
     require(finalizer == f"{policy['repository']}/.github/workflows/signed-release.yml@{os.environ['GITHUB_REF']}", "unexpected finalizer caller")
     repository_uri = f"https://github.com/{policy['repository']}"
+    signer_uri = f"{repository_uri}/.github/workflows/release-attest.yml@{os.environ['GITHUB_REF']}"
+    signer_commit = os.environ["GITHUB_SHA"]
+    trusted = finalizer_identity(policy)
+    if trusted.get("authorization") == "workflow-identity":
+        verify_workflow_identity(trusted)
+        expected = f"{trusted['repository']}/{trusted['workflow']}@{trusted['refs'][0]}"
+        require(os.environ.get("SIGNER_JOB_WORKFLOW_REF") == expected, "untrusted finalizer job identity")
+        signer_commit = os.environ.get("SIGNER_JOB_WORKFLOW_SHA", "")
+        require(valid_hash(signer_commit, 40), "missing platform finalizer revision")
+        signer_uri = "https://github.com/" + expected
+        dependencies = [{"uri": f"git+https://github.com/{trusted['repository']}@{trusted['refs'][0]}", "digest": {"gitCommit": signer_commit}}, *dependencies]
     # GitHub's attestation API requires its workflow source as the first entry.
     dependencies = [{"uri": f"git+{repository_uri}@{os.environ['GITHUB_REF']}", "digest": {"gitCommit": os.environ["GITHUB_SHA"]}}, *dependencies]
     github = {"event_name": "workflow_dispatch", "repository_id": str(metadata["id"]), "repository_owner_id": str(metadata["owner"]["id"]), "runner_environment": "github-hosted"}
-    return {"buildDefinition": {"buildType": BUILD_TYPE, "externalParameters": {"workflow": {"repository": repository_uri, "ref": os.environ["GITHUB_REF"], "path": ".github/workflows/signed-release.yml"}, "inputs": inputs}, "internalParameters": {"github": github, "finalizerWorkflow": finalizer, "finalizerCommit": os.environ["GITHUB_SHA"], "signingTransactions": summaries}, "resolvedDependencies": dependencies}, "runDetails": {"builder": {"id": f"{repository_uri}/.github/workflows/release-attest.yml@{os.environ['GITHUB_REF']}"}, "metadata": {"invocationId": f"{repository_uri}/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"}}}
+    return {"buildDefinition": {"buildType": BUILD_TYPE, "externalParameters": {"workflow": {"repository": repository_uri, "ref": os.environ["GITHUB_REF"], "path": ".github/workflows/signed-release.yml"}, "inputs": inputs}, "internalParameters": {"github": github, "finalizerWorkflow": signer_uri, "finalizerCommit": signer_commit, "signingTransactions": summaries}, "resolvedDependencies": dependencies}, "runDetails": {"builder": {"id": signer_uri}, "metadata": {"invocationId": f"{repository_uri}/actions/runs/{os.environ['GITHUB_RUN_ID']}/attempts/{os.environ['GITHUB_RUN_ATTEMPT']}"}}}
 
 
 def prepare(policy_path, source_run_id, source_attempt, out, tool_dir):
@@ -398,6 +438,9 @@ def prepare(policy_path, source_run_id, source_attempt, out, tool_dir):
             verify_provenance(original, bundle, policy, source_run, receipt["provenance"][kind])
             dependencies.append({"uri": f"urn:android-signer:unsigned:{profile}:{kind}", "digest": {"sha256": digest(data)}})
             dependencies.append({"uri": f"urn:android-signer:unsigned-provenance:{profile}:{kind}", "digest": {"sha256": digest(files[bundle.name])}})
+            if policy["builder"].get("authorization") == "workflow-identity":
+                summary = receipt["provenance"][kind]
+                dependencies.append({"uri": "git+" + summary["builder"], "digest": {"gitCommit": summary["builder_commit"]}})
         preserve_payload(inputs["apk"], files["app-signed.apk"], {"META-INF/code_transparency_signed.jwt"})
         preserve_payload(inputs["aab"], files["app-signed.aab"], {"BUNDLE-METADATA/com.android.tools.build.bundletool/code_transparency_signed.jwt", "META-INF/MANIFEST.MF", "META-INF/SIGNER.SF", "META-INF/SIGNER.RSA"})
         android_verify(root, files, receipt, tool_dir)
