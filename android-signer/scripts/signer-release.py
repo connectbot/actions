@@ -224,6 +224,108 @@ def download_asset(repository, asset):
     return data
 
 
+def public_names(manifest):
+    tag = manifest['release']['tag_name']
+    require(re.fullmatch(r'(?:git-|v)[A-Za-z0-9_.+\-]{1,150}', tag), 'unsafe release tag')
+    names = {f'ConnectBot-{tag}-{profile}.{kind}' for profile in ('oss', 'google') for kind in ('apk', 'aab')}
+    names.add('version_code.txt')
+    if not manifest['release']['prerelease']:
+        names.add('version-info.txt')
+    return names
+
+
+def evidence_name(manifest):
+    public_names(manifest)
+    return f"ConnectBot-{manifest['release']['tag_name']}-signing-evidence.zip"
+
+
+def evidence_files(data):
+    require(len(data) <= MAX_BYTES, 'evidence archive too large')
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        entries = archive.infolist()
+        require(0 < len(entries) <= 128 and len({e.filename for e in entries}) == len(entries), 'duplicate/excessive evidence entries')
+        require(sum(e.file_size for e in entries) <= MAX_BYTES, 'expanded evidence too large')
+        for entry in entries:
+            require(re.fullmatch(r'[A-Za-z0-9_.+\-]{1,220}', entry.filename) and entry.filename not in ('.', '..')
+                and not entry.is_dir() and not (entry.flag_bits & 1)
+                and (entry.external_attr >> 16) & 0o170000 != 0o120000
+                and entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED), 'unsafe evidence entry')
+        return {entry.filename: archive.read(entry) for entry in entries}
+
+
+def compact_publication(files, manifest):
+    """Package authenticated files; the archive retains the original signed manifest/bundle."""
+    public = public_names(manifest)
+    require(set(files) == set(manifest['assets']) | {'release-manifest.json', 'final.sigstore.json'}, 'incomplete release evidence')
+    require(public <= set(files), 'missing public downloads')
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in sorted(set(files) - public):
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o100644 << 16
+            archive.writestr(info, files[name])
+    data = output.getvalue()
+    require(len(data) <= MAX_BYTES, 'evidence archive too large')
+    return {**{name: files[name] for name in public}, evidence_name(manifest): data}
+
+
+def published_evidence(policy, source_run, releases):
+    marker = f"Verified Android signing; source run {source_run['id']}/{source_run['run_attempt']}; commit {source_run['head_sha']}; policy {policy['policy_hash']}"
+    matches = [release for release in releases if not release['draft'] and release.get('body', '').split('\n', 1)[0] == marker]
+    require(len(matches) <= 1, 'ambiguous published signing evidence')
+    if not matches:
+        return None
+    release = matches[0]
+    require(release['target_commitish'] == source_run['head_sha'], 'published source differs')
+    assets = rows(f"repos/{policy['repository']}/releases/{release['id']}/assets")
+    by_name = {a['name']: a for a in assets}
+    require(len(by_name) == len(assets), 'duplicate published asset')
+    name = f"ConnectBot-{release['tag_name']}-signing-evidence.zip"
+    if name not in by_name:
+        return None
+    evidence = evidence_files(download_asset(policy['repository'], by_name[name]))
+    manifest = load(evidence['release-manifest.json'])
+    require(manifest['repository_id'] == policy['repository_id'] and manifest['policy_hash'] == policy['policy_hash']
+        and manifest['source']['run_id'] == source_run['id'] and manifest['source']['attempt'] == source_run['run_attempt']
+        and manifest['source']['commit'] == source_run['head_sha'] and manifest['release']['tag_name'] == release['tag_name'], 'published transaction differs')
+    require(set(evidence) == (set(manifest['assets']) | {'release-manifest.json', 'final.sigstore.json'}) - public_names(manifest), 'published evidence set differs')
+    return release, manifest, evidence, by_name
+
+
+def recover_published(policy, source_run, releases, publication=None):
+    publication = publication or published_evidence(policy, source_run, releases)
+    if publication is None:
+        return {}
+    release, manifest, evidence, by_name = publication
+    found = {}
+    for profile in sorted(policy['profiles']):
+        envelope = evidence[f'{profile}-signing-receipt.dsse.json']
+        receipt = verify_receipt(envelope, policy)
+        validate_transaction(receipt, policy, source_run, profile)
+        files = {'signing-receipt.dsse.json': envelope, 'signing-receipt.json': evidence[f'{profile}-signing-receipt.json']}
+        require(load(files['signing-receipt.json']) == receipt, 'plain receipt differs')
+        names = [output['name'] for output in receipt['outputs']]
+        require(len(set(names)) == len(names) and {'app-signed.apk', 'app-signed.aab', 'apk-lineage.bin', 'code_transparency_signed.jwt', 'transparency-certificate.der', 'unsigned-apk.sigstore.json', 'unsigned-aab.sigstore.json'} <= set(names), 'missing/duplicate published signing output')
+        require(all(re.fullmatch(r'[A-Za-z0-9_.-]+', name) and name not in ('.', '..') for name in names), 'unsafe published signing output')
+        for output in receipt['outputs']:
+            output_name = output['name']
+            if output_name in ('app-signed.apk', 'app-signed.aab'):
+                published_name = f"ConnectBot-{release['tag_name']}-{profile}.{output_name.rsplit('.', 1)[1]}"
+                require(published_name in by_name, 'published Android output missing')
+                data = download_asset(policy['repository'], by_name[published_name])
+            else:
+                key = f'{profile}-{output_name}'
+                if key not in evidence and output_name in ('unsigned-apk.sigstore.json', 'unsigned-aab.sigstore.json'):
+                    key = f'provenance-{profile}.json'
+                require(key in evidence, 'published signing output missing')
+                data = evidence[key]
+            require(len(data) == output['bytes'] and digest(data) == output['sha256'], 'published signing output differs')
+            files[output_name] = data
+        found[profile] = (receipt, files)
+    return found
+
+
 def wait_staging(policy, source_run, timeout):
     pending = set(policy["profiles"])
     found = {}
@@ -258,6 +360,11 @@ def wait_staging(policy, source_run, timeout):
             require(load(plain) == receipt, "plain receipt differs")
             files.update({"signing-receipt.dsse.json": envelope, "signing-receipt.json": plain})
             found[profile] = (receipt, files)
+        if pending - found.keys():
+            recovered = recover_published(policy, source_run, releases)
+            for profile in pending - found.keys():
+                if profile in recovered:
+                    found[profile] = recovered[profile]
         pending -= found.keys()
         if pending:
             require(time.monotonic() < deadline, "timed out waiting for signing transactions")
@@ -444,7 +551,6 @@ def prepare(policy_path, source_run_id, source_attempt, out, tool_dir):
     predicate = final_predicate(policy, source_run_id, source_attempt, metadata, summaries, dependencies)
     (out / "predicate.json").write_bytes(json_bytes(predicate))
     (out / "verification.json").write_bytes(json_bytes({"version": 1, "source_run": source_run_id, "source_attempt": source_attempt, "source_commit": source_run["head_sha"], "profiles": summaries}))
-    (out / "release.json").write_bytes(json_bytes({"tag_name": f"verified/{source_run_id}-{source_attempt}-{policy['policy_hash'][:16]}", "target_commitish": source_run["head_sha"]}))
 
 
 def upload(repo, release_id, name, data, content_type="application/octet-stream"):
@@ -463,15 +569,15 @@ def upload(repo, release_id, name, data, content_type="application/octet-stream"
         run("gh", "api", "--hostname", "github.com", "--method", "POST", "-H", f"Content-Type: {content_type}", f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name={quote(name, safe='')}", "--input", tmp.name)
 
 
-def publish_draft(out, policy_path):
+def verify_final_bundle(out, policy_path):
     policy = load(policy_path.read_bytes())
     validate_policy(policy)
     repo = os.environ["GITHUB_REPOSITORY"]
-    require(repo == policy["repository"], "draft repository differs from policy")
+    require(repo == policy["repository"], "final bundle repository differs from policy")
     finalizer = policy["finalizer"]
-    release = load((out / "release.json").read_bytes())
     metadata = load((out / "verification.json").read_bytes())
-    # Both freshly emitted bundles must verify before anything enters the final draft.
+    require(set(metadata["profiles"]) == {"oss", "google"}, "both profiles required")
+    # Authenticate all four outputs without creating another GitHub release.
     for profile in metadata["profiles"]:
         for kind in ("apk", "aab"):
             verified = load(run("gh", "attestation", "verify", out / profile / f"app-signed.{kind}",
@@ -479,30 +585,13 @@ def publish_draft(out, policy_path):
                 "--signer-workflow", f"{finalizer['repository']}/{finalizer['workflow']}",
                 "--source-digest", os.environ["GITHUB_SHA"], "--source-ref", os.environ["GITHUB_REF"],
                 "--deny-self-hosted-runners", "--format", "json"))
-            require(len(verified) == 1, "ambiguous final draft provenance")
+            require(len(verified) == 1, "ambiguous final bundle provenance")
             verify_finalizer_certificate(policy, verified[0]["verificationResult"]["signature"]["certificate"])
-    tag = release["tag_name"]
-    marker = f"Verified Android signing; source run {metadata['source_run']}/{metadata['source_attempt']}"
-    matches = [r for r in rows(f"repos/{repo}/releases") if r["tag_name"] == tag]
-    require(len(matches) <= 1, "ambiguous final draft")
-    if matches:
-        target = matches[0]
-        require(target["draft"] and target["target_commitish"] == release["target_commitish"] and target["body"] == marker, "unmanaged/published final release")
-    else:
-        body = {**release, "draft": True, "name": f"Verified Android build {metadata['source_run']}/{metadata['source_attempt']}", "body": marker}
-        target = load(subprocess.run(["gh", "api", "--hostname", "github.com", "--method", "POST", f"repos/{repo}/releases", "--input", "-"], input=json_bytes(body), stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=300).stdout)
-    for profile in sorted(metadata["profiles"]):
-        for path in sorted((out / profile).iterdir()):
-            if path.name.startswith("app-unsigned.") or path.name in ("upload.pem", "trust.p12"):
-                continue
-            upload(repo, target["id"], f"{profile}-{path.name}", path.read_bytes())
-    for name in ("final.sigstore.json", "predicate.json", "verification.json"):
-        upload(repo, target["id"], name, (out / name).read_bytes(), "application/json")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "draft"))
+    parser.add_argument("command", choices=("prepare", "verify-bundle"))
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--source-run", type=int)
     parser.add_argument("--source-attempt", type=int)
@@ -514,7 +603,7 @@ def main():
         prepare(args.policy, args.source_run, args.source_attempt, args.out, args.tools.resolve())
     else:
         require(args.policy, "central policy snapshot required")
-        publish_draft(args.out, args.policy)
+        verify_final_bundle(args.out, args.policy)
 
 
 if __name__ == "__main__":

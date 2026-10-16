@@ -69,7 +69,7 @@ jobs:
           predicate-type: https://slsa.dev/provenance/v1
           predicate-path: ${{ runner.temp }}/verified-release/predicate.json
           create-storage-record: false
-      - name: Prepare verified draft
+      - name: Seal verified publishing handoff
         id: seal
         uses: $/android-signer
         env:
