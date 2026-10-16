@@ -5,6 +5,7 @@ Shared GitHub Actions for ConnectBot releases, versioned documentation, and revi
 | Automation | Entry points | Guide |
 | --- | --- | --- |
 | Releases | `prepare/`, `publish/`, `branch/`; reusable release workflows | Setup and usage below |
+| Android signing | `connectbot/actions/android-signer@REF` | [Android signer](android-signer/README.md) |
 | Maven publications | Reusable `publish-maven.yml` workflow | [Attested publication](publication/README.md) |
 | Documentation | `connectbot/actions/docs@REF` | [Documentation action](docs/README.md) |
 | Stale issues | `connectbot/actions/stale-issues@REF`; reusable `stale-issues.yml` workflow | [Stale issue policy](stale-issues/README.md) |
