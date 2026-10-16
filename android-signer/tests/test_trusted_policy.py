@@ -12,11 +12,7 @@ import test_publishing as fixtures
 p = fixtures.p
 
 
-def identity(workflow="android-attest.yml"):
-    return {"repository": "connectbot/actions", "repository_id": 1369420724,
-        "workflow": ".github/workflows/" + workflow, "refs": ["refs/heads/android-signer-v1"],
-        "authorization": "workflow-identity", "sha256": [], "helpers": {}}
-
+identity = fixtures.identity
 
 class PolicyTests(unittest.TestCase):
     setUp = fixtures.HandoffTests.setUp
@@ -60,6 +56,21 @@ class PolicyTests(unittest.TestCase):
                           [{"id": 1369420724, "visibility": "public"}, {"protected": False}]):
             with mock.patch.object(p.r, "api", side_effect=responses), self.assertRaises(ValueError):
                 p.r.verify_workflow_identity(identity())
+
+    def test_removed_authorization_modes_and_missing_finalizer_are_rejected(self):
+        for field, value in (("authorization", "content-pins"), ("authorization", "workflow-identity"),
+                             ("sha256", []), ("helpers", {})):
+            policy = {**self.policy, "builder": {**self.policy["builder"], field: value}}
+            with self.assertRaisesRegex(ValueError, "unsupported workflow policy"):
+                p.r.validate_policy(policy)
+        old = {**self.policy, "version": 2}
+        with self.assertRaisesRegex(ValueError, "version 3"):
+            p.r.validate_policy(old)
+        missing = {k: v for k, v in self.policy.items() if k != "finalizer"}
+        with self.assertRaisesRegex(ValueError, "required policy identities"):
+            p.r.validate_policy(missing)
+        with self.assertRaises(ValueError):
+            p.r.validate_policy({**self.policy, "callers": {".github/workflows/ci.yml": []}})
 
     def test_shared_finalizer_certificate_and_predicate_must_agree(self):
         trusted = identity("android-finalize.yml")

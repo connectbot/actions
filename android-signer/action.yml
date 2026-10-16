@@ -9,8 +9,7 @@ inputs:
     description: Output directory or handoff; output file path for policy.
     required: true
   policy:
-    description: Independently approved public signer policy in the consumer checkout.
-    default: .github/signer-policy.json
+    description: Explicit central policy snapshot produced by the policy command.
   profile:
     description: Android flavor for build-info (oss or google).
   version-code-file:
