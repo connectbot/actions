@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 OPTIONS = {
+    "policy": (),
     "build-info": ("profile", "version-code-file"),
     "prepare": ("policy", "source-run", "source-attempt", "tools"),
     "seal": ("policy", "bundle"),

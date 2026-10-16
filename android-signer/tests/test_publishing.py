@@ -18,6 +18,11 @@ p = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(p)
 
 
+def identity(workflow="android-attest.yml"):
+    return {"repository": "connectbot/actions", "repository_id": 1369420724,
+        "workflow": ".github/workflows/" + workflow, "refs": ["refs/heads/android-signer-v1"]}
+
+
 class HandoffTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -25,12 +30,17 @@ class HandoffTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         cert = b"public test certificate"
         keys = {k: "a" * 64 for k in ("original", "classical", "upload", "transparency")}
-        self.policy = {"version": 2, "repository": "example/app", "repository_id": 42, "visibility": "public", "revision": 1,
+        self.policy = {"version": 3, "repository": "example/app", "repository_id": 42, "visibility": "public", "revision": 1,
             "policy_hash": "b" * 64, "signer_revision": "c" * 40, "refs": ["refs/heads/main", "refs/tags/v*"],
+            "callers": [".github/workflows/ci.yml"], "builder": identity(), "finalizer": identity("android-finalize.yml"),
             "receipt_keys": {p.digest(cert): base64.b64encode(cert).decode()},
             "profiles": {name: {"keys": {**keys, "hybrid": None}, "lineage_sha256": "d" * 64, "rotation_min_sdk": 33} for name in ("oss", "google")}}
         self.policy_path = self.root / "policy.json"
         self.policy_path.write_bytes(p.json_bytes(self.policy))
+        self.policy_path.with_suffix(".source.json").write_bytes(p.json_bytes({
+            "repository": p.POLICY_REPOSITORY, "repository_id": p.POLICY_REPOSITORY_ID,
+            "commit": "1" * 40, "path": ".github/android-signer/42.json",
+            "sha256": p.digest(self.policy_path.read_bytes())}))
         self.handoff = self.root / "handoff"
         self.handoff.mkdir()
         self.event = self.root / "event.json"
@@ -45,8 +55,11 @@ class HandoffTests(unittest.TestCase):
         self.predicate = {"buildDefinition": {"buildType": p.r.BUILD_TYPE, "externalParameters": {"workflow": {
             "repository": "https://github.com/example/app", "ref": "refs/heads/main", "path": ".github/workflows/signed-release.yml"},
             "inputs": {"source_run": "10", "source_attempt": "2"}}}}
+        signer = "https://github.com/connectbot/actions/.github/workflows/android-finalize.yml@refs/heads/android-signer-v1"
+        self.predicate["runDetails"] = {"builder": {"id": signer}}
+        self.predicate["buildDefinition"]["internalParameters"] = {"finalizerCommit": "1" * 40}
         self.result = {"verificationResult": {"statement": {"predicateType": p.r.SLSA, "predicate": self.predicate, "subject": []},
-            "signature": {"certificate": {"runInvocationURI": "https://github.com/example/app/actions/runs/99/attempts/1", "sourceRepositoryIdentifier": "42"}}}}
+            "signature": {"certificate": {"runInvocationURI": "https://github.com/example/app/actions/runs/99/attempts/1", "sourceRepositoryIdentifier": "42", "buildSignerURI": signer, "buildSignerDigest": "1" * 40}}}}
         self.populate()
 
     def populate(self):
@@ -76,10 +89,11 @@ class HandoffTests(unittest.TestCase):
     def verify(self, env=None):
         with mock.patch.dict(os.environ, self.env if env is None else env, clear=True), \
              mock.patch.object(p.r, "api", return_value={"id": 42, "visibility": "public", "default_branch": "main"}), \
+             mock.patch.object(p.r, "verify_workflow_identity"), \
              mock.patch.object(p.r, "run", return_value=p.json_bytes([self.result])) as run:
             result = p.verify_handoff(self.handoff, self.sha, self.policy_path)
             args = run.call_args.args
-            self.assertIn("--signer-digest", args)
+            self.assertNotIn("--signer-digest", args)
             self.assertIn("--source-digest", args)
             self.assertIn("--deny-self-hosted-runners", args)
             return result
@@ -288,7 +302,8 @@ class HandoffTests(unittest.TestCase):
         (self.handoff / "predicate.json").write_bytes(changed)
         self.manifest["assets"]["predicate.json"] = {"sha256": p.digest(changed), "bytes": len(changed)}
         (self.handoff / "release-manifest.json").write_bytes(p.json_bytes(self.manifest))
-        with mock.patch.object(p.r, "download_asset", side_effect=lambda repo, asset: files[asset["name"]]), \
+        with mock.patch.object(p.r, "verify_workflow_identity"), \
+             mock.patch.object(p.r, "download_asset", side_effect=lambda repo, asset: files[asset["name"]]), \
              mock.patch.object(p.r, "run", return_value=p.json_bytes([self.result])):
             p.verify_existing_publication(self.handoff, self.manifest, existing)
             self.manifest["assets"]["version_code.txt"]["sha256"] = "0" * 64

@@ -4,3 +4,13 @@ paths:
       # GitHub.com documents job.workflow_sha, but actionlint 1.7.12 predates it.
       # https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context
       - 'property "workflow_sha" is not defined in object type'
+  .github/workflows/android-finalize.yml:
+    ignore:
+      # Documented GitHub.com features newer than actionlint 1.7.12.
+      - 'property "workflow_(ref|sha)" is not defined in object type'
+      - 'specifying action "\$/android-signer" in invalid format'
+  .github/workflows/android-publish.yml:
+    ignore:
+      # Documented GitHub.com features newer than actionlint 1.7.12.
+      - 'property "workflow_(ref|sha)" is not defined in object type'
+      - 'specifying action "\$/android-signer" in invalid format'
