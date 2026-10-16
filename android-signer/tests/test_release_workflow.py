@@ -10,6 +10,8 @@ import tempfile
 import tarfile
 import unittest
 from unittest import mock
+
+from test_publishing import identity
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,13 +27,15 @@ class ReleaseTests(unittest.TestCase):
         inputs = {"source_run": "42", "source_attempt": "2"}
         event.write_text(release.json.dumps({"inputs": inputs}))
         environment = {"GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_PATH": str(event), "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_WORKFLOW_REF": f"{policy['repository']}/.github/workflows/signed-release.yml@refs/heads/main", "GITHUB_SHA": "c" * 40, "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1"}
-        with mock.patch.dict(release.os.environ, environment, clear=True):
+        environment.update(SIGNER_JOB_WORKFLOW_REF="connectbot/actions/.github/workflows/android-finalize.yml@refs/heads/android-signer-v1", SIGNER_JOB_WORKFLOW_SHA="d" * 40)
+        with mock.patch.dict(release.os.environ, environment, clear=True), mock.patch.object(release, "verify_workflow_identity"):
             dependency = {"uri": "urn:test:unsigned", "digest": {"sha256": "d" * 64}}
             predicate = release.final_predicate(policy, 42, 2, {"id": policy["repository_id"], "owner": {"id": 7}, "default_branch": "main"}, {}, [dependency])
             self.assertEqual(predicate["buildDefinition"]["externalParameters"]["inputs"], inputs)
             self.assertEqual(predicate["buildDefinition"]["externalParameters"]["workflow"]["path"], ".github/workflows/signed-release.yml")
             self.assertEqual(predicate["buildDefinition"]["resolvedDependencies"][0]["digest"], {"gitCommit": "c" * 40})
-            self.assertEqual(predicate["buildDefinition"]["resolvedDependencies"][1], dependency)
+            self.assertEqual(predicate["buildDefinition"]["resolvedDependencies"][1]["digest"], {"gitCommit": "d" * 40})
+            self.assertEqual(predicate["buildDefinition"]["resolvedDependencies"][2], dependency)
             event.write_text(release.json.dumps({"inputs": {**inputs, "source_run": "43"}}))
             with self.assertRaises(ValueError):
                 release.final_predicate(policy, 42, 2, {"id": policy["repository_id"], "owner": {"id": 7}, "default_branch": "main"}, {}, [])
@@ -89,7 +93,7 @@ class ReleaseTests(unittest.TestCase):
         cls.tmp.cleanup()
 
     def policy(self):
-        return {"version": 2, "visibility": "public", "repository": "example/app", "repository_id": 42,
+        return {"version": 3, "callers": [".github/workflows/ci.yml"], "builder": identity(), "finalizer": identity("android-finalize.yml"), "visibility": "public", "repository": "example/app", "repository_id": 42,
             "policy_hash": "a" * 64, "signer_revision": "b" * 40, "revision": 3,
             "receipt_keys": {self.fingerprint: base64.b64encode(self.der).decode()},
             "profiles": {"oss": {"package": "org.example", "keys": {"original": "c" * 64, "classical": "d" * 64, "upload": "e" * 64, "transparency": "f" * 64, "hybrid": None}, "lineage_sha256": "1" * 64, "rotation_min_sdk": 33, "hybrid_min_sdk": None}}}

@@ -162,12 +162,11 @@ def package_release(out, policy_path):
     if stable:
         add_asset(root, assets, "version-info.txt", f"VERSION_NAME={info['tag'][1:]}\nVERSION_CODE={info['version_code']}\n".encode())
     predicate = load((out / "predicate.json").read_bytes())
-    if policy.get("finalizer", {}).get("authorization") == "workflow-identity":
-        origin = load(policy_path.with_suffix(".source.json").read_bytes())
-        require(origin["repository"] == POLICY_REPOSITORY and origin["repository_id"] == POLICY_REPOSITORY_ID
-            and origin["sha256"] == digest(policy_path.read_bytes()) and r.valid_hash(origin["commit"], 40), "central policy snapshot differs")
-        dependencies.append({"uri": f"git+https://github.com/{POLICY_REPOSITORY}@refs/heads/main#{origin['path']}",
-            "digest": {"gitCommit": origin["commit"], "sha256": origin["sha256"]}})
+    origin = load(policy_path.with_suffix(".source.json").read_bytes())
+    require(origin["repository"] == POLICY_REPOSITORY and origin["repository_id"] == POLICY_REPOSITORY_ID
+        and origin["sha256"] == digest(policy_path.read_bytes()) and r.valid_hash(origin["commit"], 40), "central policy snapshot differs")
+    dependencies.append({"uri": f"git+https://github.com/{POLICY_REPOSITORY}@refs/heads/main#{origin['path']}",
+        "digest": {"gitCommit": origin["commit"], "sha256": origin["sha256"]}})
     predicate["buildDefinition"]["resolvedDependencies"].extend(dependencies)
     (out / "predicate.json").write_bytes(json_bytes(predicate))
     for name, data in (("predicate.json", json_bytes(predicate)), ("verification.json", json_bytes(verification)),
@@ -191,11 +190,10 @@ def verify_handoff(root, expected_hash, policy_path):
     r.validate_finalizer_context(meta)
     require(meta["id"] == policy["repository_id"] and meta["visibility"] == policy["visibility"], "publisher repository identity differs")
     require(os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and os.environ["GITHUB_REPOSITORY"] == policy["repository"], "publisher context differs")
-    finalizer = r.finalizer_identity(policy)
-    signer_pin = [] if finalizer.get("authorization") == "workflow-identity" else ["--signer-digest", os.environ["GITHUB_SHA"]]
+    finalizer = policy["finalizer"]
     verified = load(r.run("gh", "attestation", "verify", path, "--bundle", root / "final.sigstore.json", "--repo", policy["repository"],
         "--signer-workflow", f"{finalizer['repository']}/{finalizer['workflow']}", "--source-digest", os.environ["GITHUB_SHA"],
-        *signer_pin, "--source-ref", os.environ["GITHUB_REF"], "--deny-self-hosted-runners", "--format", "json"))
+        "--source-ref", os.environ["GITHUB_REF"], "--deny-self-hosted-runners", "--format", "json"))
     require(len(verified) == 1, "ambiguous final provenance")
     result = verified[0]["verificationResult"]
     signer_uri, signer_commit = r.verify_finalizer_certificate(policy, result["signature"]["certificate"])
@@ -210,10 +208,9 @@ def verify_handoff(root, expected_hash, policy_path):
             and type(producer["attempt"]) is int and 0 < producer["attempt"] <= current["attempt"], "handoff identity differs")
     statement = result["statement"]
     predicate = statement["predicate"]
-    if finalizer.get("authorization") == "workflow-identity":
-        require(predicate["runDetails"]["builder"]["id"] == signer_uri
-            and predicate["buildDefinition"]["internalParameters"]["finalizerCommit"] == signer_commit,
-            "final predicate builder differs from platform certificate")
+    require(predicate["runDetails"]["builder"]["id"] == signer_uri
+        and predicate["buildDefinition"]["internalParameters"]["finalizerCommit"] == signer_commit,
+        "final predicate builder differs from platform certificate")
     invocation = f"https://github.com/{policy['repository']}/actions/runs/{producer['run_id']}/attempts/{producer['attempt']}"
     require(statement["predicateType"] == r.SLSA and predicate["buildDefinition"]["buildType"] == r.BUILD_TYPE
             and result["signature"]["certificate"]["runInvocationURI"] == invocation
@@ -291,11 +288,10 @@ def verify_existing_publication(root, manifest, existing):
         (path / "release-manifest.json").write_bytes(old_bytes)
         (path / "final.sigstore.json").write_bytes(r.download_asset(manifest["repository"], by_name["final.sigstore.json"]))
         policy = load((root / "signer-policy.json").read_bytes())
-        finalizer = r.finalizer_identity(policy)
-        signer_pin = [] if finalizer.get("authorization") == "workflow-identity" else ["--signer-digest", old["finalizer"]["commit"]]
+        finalizer = policy["finalizer"]
         verified = load(r.run("gh", "attestation", "verify", path / "release-manifest.json", "--bundle", path / "final.sigstore.json", "--repo", manifest["repository"],
             "--signer-workflow", f"{finalizer['repository']}/{finalizer['workflow']}", "--source-digest", old["finalizer"]["commit"],
-            *signer_pin, "--source-ref", old["finalizer"]["ref"], "--deny-self-hosted-runners", "--format", "json"))
+            "--source-ref", old["finalizer"]["ref"], "--deny-self-hosted-runners", "--format", "json"))
         require(len(verified) == 1, "ambiguous published provenance")
         r.verify_finalizer_certificate(policy, verified[0]["verificationResult"]["signature"]["certificate"])
     require(len(verified) == 1, "ambiguous published attestation")
@@ -492,7 +488,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("policy", "build-info", "prepare", "seal", "verify", "github", "play"))
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--policy", type=Path, default=Path(".github/signer-policy.json"))
+    parser.add_argument("--policy", type=Path)
     parser.add_argument("--source-run", type=int)
     parser.add_argument("--source-attempt", type=int)
     parser.add_argument("--tools", type=Path)
@@ -502,6 +498,7 @@ def main():
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
+    require(args.command in ("policy", "build-info") or args.policy, "explicit central policy snapshot required")
     result = None
     if args.command == "policy":
         fetch_policy(args.out)
