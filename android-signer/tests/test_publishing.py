@@ -62,6 +62,42 @@ class HandoffTests(unittest.TestCase):
             "signature": {"certificate": {"runInvocationURI": "https://github.com/example/app/actions/runs/99/attempts/1", "sourceRepositoryIdentifier": "42", "buildSignerURI": signer, "buildSignerDigest": "1" * 40}}}}
         self.populate()
 
+    def test_final_draft_uses_policy_identity_and_rejects_old_or_wrong_branch_signers(self):
+        out = self.root / "verified-draft"
+        out.mkdir()
+        metadata = {"source_run": 10, "source_attempt": 2, "profiles": {"oss": {}, "google": {}}}
+        release = {"tag_name": "verified/10-2-policy", "target_commitish": "f" * 40}
+        (out / "verification.json").write_bytes(p.json_bytes(metadata))
+        (out / "release.json").write_bytes(p.json_bytes(release))
+        for profile in metadata["profiles"]:
+            (out / profile).mkdir()
+        target = {**release, "id": 7, "draft": True, "body": "Verified Android signing; source run 10/2"}
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+             mock.patch.object(p.r, "verify_workflow_identity"), \
+             mock.patch.object(p.r, "rows", return_value=[target]) as rows, \
+             mock.patch.object(p.r, "upload"), \
+             mock.patch.object(p.r, "run", return_value=p.json_bytes([self.result])) as run:
+            for name in ("final.sigstore.json", "predicate.json"):
+                (out / name).write_bytes(b"fixture")
+            p.r.publish_draft(out, self.policy_path)
+            self.assertEqual(run.call_count, 4)
+            for call in run.call_args_list:
+                args = call.args
+                self.assertEqual(args[args.index("--signer-workflow") + 1],
+                    "connectbot/actions/.github/workflows/android-finalize.yml")
+                self.assertEqual(args[args.index("--source-digest") + 1], self.env["GITHUB_SHA"])
+                self.assertEqual(args[args.index("--source-ref") + 1], self.env["GITHUB_REF"])
+                self.assertIn("--deny-self-hosted-runners", args)
+            for signer in ("example/app/.github/workflows/release-attest.yml@refs/heads/main",
+                           "connectbot/actions/.github/workflows/android-finalize.yml@refs/heads/main"):
+                bad = copy.deepcopy(self.result)
+                bad["verificationResult"]["signature"]["certificate"]["buildSignerURI"] = "https://github.com/" + signer
+                run.return_value = p.json_bytes([bad])
+                rows.reset_mock()
+                with self.assertRaisesRegex(ValueError, "builder differs"):
+                    p.r.publish_draft(out, self.policy_path)
+                rows.assert_not_called()
+
     def populate(self):
         files = {"predicate.json": p.json_bytes(self.predicate), "verification.json": b"{}", "signer-policy.json": self.policy_path.read_bytes(), "version_code.txt": b"101\n"}
         for profile in ("oss", "google"):
