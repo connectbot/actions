@@ -155,4 +155,3 @@ jobs:
           name: provenance-${{ matrix.flavor }}-${{ github.run_attempt }}
           path: provenance-${{ matrix.flavor }}.json
           if-no-files-found: error
-
