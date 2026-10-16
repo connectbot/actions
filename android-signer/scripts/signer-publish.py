@@ -264,14 +264,68 @@ def gh_json(method, path, body):
         input=json_bytes(body), check=True, capture_output=True, timeout=300).stdout)
 
 
+def published_files(root, manifest, existing):
+    """Normalize compact or in-progress publications to their authenticated file set."""
+    repo = manifest['repository']
+    by_name = {a['name']: a for a in existing}
+    require(len(by_name) == len(existing), 'duplicate published asset')
+    flat_names = set(manifest['assets']) | {'release-manifest.json', 'final.sigstore.json'}
+    archive_name = r.evidence_name(manifest)
+    if archive_name not in by_name or by_name[archive_name].get('state') != 'uploaded':
+        require(set(by_name) - {archive_name} == flat_names, 'published release is incomplete')
+        return [asset for asset in existing if asset['name'] != archive_name], lambda asset: r.download_asset(repo, asset)
+    evidence = r.evidence_files(r.download_asset(repo, by_name[archive_name]))
+    require(set(evidence) == flat_names - r.public_names(manifest), 'published evidence set differs')
+    require(r.public_names(manifest) <= set(by_name) <= flat_names | {archive_name}, 'published release is incomplete')
+    expanded = dict(by_name)
+    expanded.pop(archive_name)
+    for name, data in evidence.items():
+        descriptor = {'name': name, 'state': 'uploaded', 'digest': 'sha256:' + digest(data), 'size': len(data)}
+        if name in expanded:
+            require(all(expanded[name].get(k) == descriptor[k] for k in ('state', 'digest', 'size')), 'published release bytes differ')
+        expanded[name] = descriptor
+    return list(expanded.values()), lambda asset: evidence[asset['name']] if asset['name'] in evidence else r.download_asset(repo, by_name[asset['name']])
+
+
+def cleanup_staging(manifest, files):
+    """Delete only this completed transaction's managed drafts after preserving its evidence."""
+    repo, source = manifest['repository'], manifest['source']
+    expected = {}
+    for profile in ('oss', 'google'):
+        job = f"v2-{manifest['repository_id']}-{source['run_id']}-{source['attempt']}-{profile}-{manifest['policy_hash']}"
+        expected['signer/' + job] = (f"Hermit Android signer job {job}; commit {source['commit']}", [profile])
+    # Remove a verified draft left by an earlier workflow invocation of this same transaction.
+    expected[f"verified/{source['run_id']}-{source['attempt']}-{manifest['policy_hash'][:16]}"] = (
+        f"Verified Android signing; source run {source['run_id']}/{source['attempt']}", ['oss', 'google'])
+    removed = []
+    releases = r.rows(f'repos/{repo}/releases')
+    for tag, (marker, profiles) in expected.items():
+        matching = [release for release in releases if release['tag_name'] == tag]
+        require(len(matching) <= 1, 'ambiguous staging cleanup')
+        if not matching:
+            continue
+        release = matching[0]
+        require(release['draft'] and release['target_commitish'] == source['commit'] and release['body'] == marker, 'refusing unmanaged staging cleanup')
+        assets = r.rows(f"repos/{repo}/releases/{release['id']}/assets")
+        by_name = {asset['name']: asset for asset in assets}
+        require(len(by_name) == len(assets), 'duplicate staging cleanup asset')
+        for profile in profiles:
+            name = 'signing-receipt.dsse.json' if tag.startswith('signer/') else f'{profile}-signing-receipt.dsse.json'
+            require(name in by_name and r.download_asset(repo, by_name[name]) == files[f'{profile}-signing-receipt.dsse.json'], 'staging cleanup receipt differs')
+        r.run('gh', 'api', '--hostname', 'github.com', '--method', 'DELETE', f"repos/{repo}/releases/{release['id']}")
+        removed.append(release['id'])
+    return removed
+
+
 def verify_existing_publication(root, manifest, existing):
     """A complete rerun may produce fresh provenance; retain the original published evidence."""
+    existing, download = published_files(root, manifest, existing)
     by_name = {a["name"]: a for a in existing}
     require(len(by_name) == len(existing) and set(by_name) == set(manifest["assets"]) | {"release-manifest.json", "final.sigstore.json"}, "published release is incomplete")
     if all(a.get("state") == "uploaded" and a.get("digest") == f"sha256:{digest((root / name).read_bytes())}"
            and a["size"] == (root / name).stat().st_size for name, a in by_name.items()):
-        return
-    old_bytes = r.download_asset(manifest["repository"], by_name["release-manifest.json"])
+        return {name: (root / name).read_bytes() for name in by_name}
+    old_bytes = download(by_name["release-manifest.json"])
     require(len(old_bytes) <= 4 * 1024 * 1024, "published manifest too large")
     old = load(old_bytes)
     require(set(old) == set(manifest) and all(old[k] == manifest[k] for k in manifest if k not in ("assets", "finalizer"))
@@ -286,7 +340,7 @@ def verify_existing_publication(root, manifest, existing):
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory)
         (path / "release-manifest.json").write_bytes(old_bytes)
-        (path / "final.sigstore.json").write_bytes(r.download_asset(manifest["repository"], by_name["final.sigstore.json"]))
+        (path / "final.sigstore.json").write_bytes(download(by_name["final.sigstore.json"]))
         policy = load((root / "signer-policy.json").read_bytes())
         finalizer = policy["finalizer"]
         verified = load(r.run("gh", "attestation", "verify", path / "release-manifest.json", "--bundle", path / "final.sigstore.json", "--repo", manifest["repository"],
@@ -302,6 +356,16 @@ def verify_existing_publication(root, manifest, existing):
     for name, expected in old["assets"].items():
         require(any(s.get("name", "").rsplit("/", 1)[-1] == name and s.get("digest", {}).get("sha256") == expected["sha256"]
                     for s in result["statement"]["subject"]), "published asset absent from attestation")
+
+    files = {}
+    for name in by_name:
+        if name in r.public_names(old):
+            data = (root / name).read_bytes()
+            require(digest(data) == by_name[name]['digest'].removeprefix('sha256:'), 'published release bytes differ')
+            files[name] = data
+        else:
+            files[name] = download(by_name[name])
+    return files
 
 
 def ensure_release_tag(repo, tag, commit):
@@ -322,6 +386,12 @@ def ensure_release_tag(repo, tag, commit):
     require(obj["type"] == "commit" and obj["sha"] == commit, "release tag points to another commit")
 
 
+def download_notes(manifest):
+    name = r.evidence_name(manifest)
+    url = f"https://github.com/{manifest['repository']}/releases/download/{urllib.parse.quote(manifest['release']['tag_name'], safe='')}/{urllib.parse.quote(name, safe='')}"
+    return f"### Debug symbols and verification\n\n[{name}]({url}) contains the per-flavor ProGuard mappings and native debug symbols, plus signing receipts, provenance, transparency and rotation evidence."
+
+
 def github_release(root, manifest):
     repo, release = manifest["repository"], manifest["release"]
     source = manifest["source"]
@@ -335,22 +405,40 @@ def github_release(root, manifest):
     ensure_release_tag(repo, release["tag_name"], source["commit"])
     if not matches:
         notes = gh_json("POST", f"repos/{repo}/releases/generate-notes", {"tag_name": release["tag_name"], "target_commitish": source["commit"]})
-        target = gh_json("POST", f"repos/{repo}/releases", {**release, "draft": True, "body": marker + "\n\n" + notes["body"]})
-    names = set(manifest["assets"]) | {"release-manifest.json", "final.sigstore.json"}
+        target = gh_json("POST", f"repos/{repo}/releases", {**release, "draft": True, "body": marker + "\n\n" + download_notes(manifest) + "\n\n" + notes["body"]})
+    flat_names = set(manifest['assets']) | {'release-manifest.json', 'final.sigstore.json'}
     existing = r.rows(f"repos/{repo}/releases/{target['id']}/assets")
-    require(len({a['name'] for a in existing}) == len(existing) and {a['name'] for a in existing} <= names, "unexpected publication assets")
-    if not target["draft"]:
-        verify_existing_publication(root, manifest, existing)
+    require(len({a['name'] for a in existing}) == len(existing)
+        and {a['name'] for a in existing} <= flat_names | {r.evidence_name(manifest)}, 'unexpected publication assets')
+    if not target['draft']:
+        files = verify_existing_publication(root, manifest, existing)
     else:
-        for name in sorted(names):
-            r.upload(repo, target["id"], name, (root / name).read_bytes())
-        complete = r.rows(f"repos/{repo}/releases/{target['id']}/assets")
-        require(len(complete) == len(names) and {a['name'] for a in complete} == names, "publication assets incomplete")
-        for asset in complete:
-            data = (root / asset["name"]).read_bytes()
-            require(asset.get("state") == "uploaded" and asset.get("digest") == f"sha256:{digest(data)}" and asset["size"] == len(data), "publication asset digest differs")
-        target = gh_json("PATCH", f"repos/{repo}/releases/{target['id']}", {"draft": False, "make_latest": "legacy" if not release["prerelease"] else "false"})
-    return {"destination": "github", "release_id": target["id"], "tag": release["tag_name"], "url": target["html_url"], "status": "published"}
+        files = {name: (root / name).read_bytes() for name in flat_names}
+    preserved = load(files['release-manifest.json'])
+    public = r.compact_publication(files, preserved)
+    current = {a['name']: a for a in existing}
+    for name in sorted(public):
+        data = public[name]
+        if name in current and current[name].get('state') == 'uploaded':
+            require(current[name]['digest'] == 'sha256:' + digest(data) and current[name]['size'] == len(data), 'conflicting public download')
+        else:
+            r.upload(repo, target['id'], name, data)
+    complete = r.rows(f"repos/{repo}/releases/{target['id']}/assets")
+    by_name = {a['name']: a for a in complete}
+    require(len(by_name) == len(complete) and set(public) <= set(by_name) <= flat_names | set(public), 'publication assets incomplete')
+    for name, data in public.items():
+        asset = by_name[name]
+        require(asset.get('state') == 'uploaded' and asset.get('digest') == 'sha256:' + digest(data) and asset['size'] == len(data), 'publication asset digest differs')
+    # All original signed files are now retained in the verified archive or named downloads.
+    # Remove loose evidence only after the complete replacement has been confirmed.
+    for name in sorted(set(by_name) - set(public)):
+        r.run('gh', 'api', '--hostname', 'github.com', '--method', 'DELETE', f"repos/{repo}/releases/assets/{by_name[name]['id']}")
+    if target['draft']:
+        target = gh_json('PATCH', f"repos/{repo}/releases/{target['id']}", {'draft': False, 'make_latest': 'legacy' if not release['prerelease'] else 'false'})
+    removed = cleanup_staging(preserved, files)
+    return {'destination': 'github', 'release_id': target['id'], 'tag': release['tag_name'], 'url': target['html_url'], 'status': 'published',
+            'public_assets': sorted(public), 'evidence_archive': r.evidence_name(preserved), 'staging_releases_removed': removed}
+
 
 
 class PlayError(RuntimeError):
@@ -517,7 +605,7 @@ def main():
         with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
             outputs.write(f"manifest_sha256={sha}\n")
         shutil.copyfile(args.bundle, args.out / "final.sigstore.json")
-        r.publish_draft(args.out, args.policy)
+        r.verify_final_bundle(args.out, args.policy)
     else:
         manifest = verify_handoff(args.out, args.manifest_sha256, args.policy)
         if args.command == "github":
