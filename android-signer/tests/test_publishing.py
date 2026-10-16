@@ -62,7 +62,7 @@ class HandoffTests(unittest.TestCase):
             "signature": {"certificate": {"runInvocationURI": "https://github.com/example/app/actions/runs/99/attempts/1", "sourceRepositoryIdentifier": "42", "buildSignerURI": signer, "buildSignerDigest": "1" * 40}}}}
         self.populate()
 
-    def test_final_draft_uses_policy_identity_and_rejects_old_or_wrong_branch_signers(self):
+    def test_bundle_verification_uses_policy_identity_without_creating_drafts(self):
         out = self.root / "verified-draft"
         out.mkdir()
         metadata = {"source_run": 10, "source_attempt": 2, "profiles": {"oss": {}, "google": {}}}
@@ -79,7 +79,7 @@ class HandoffTests(unittest.TestCase):
              mock.patch.object(p.r, "run", return_value=p.json_bytes([self.result])) as run:
             for name in ("final.sigstore.json", "predicate.json"):
                 (out / name).write_bytes(b"fixture")
-            p.r.publish_draft(out, self.policy_path)
+            p.r.verify_final_bundle(out, self.policy_path)
             self.assertEqual(run.call_count, 4)
             for call in run.call_args_list:
                 args = call.args
@@ -95,7 +95,7 @@ class HandoffTests(unittest.TestCase):
                 run.return_value = p.json_bytes([bad])
                 rows.reset_mock()
                 with self.assertRaisesRegex(ValueError, "builder differs"):
-                    p.r.publish_draft(out, self.policy_path)
+                    p.r.verify_final_bundle(out, self.policy_path)
                 rows.assert_not_called()
 
     def populate(self):
@@ -262,10 +262,11 @@ class HandoffTests(unittest.TestCase):
         marker = "Verified Android signing; source run 10/2; commit " + "f" * 40 + "; policy " + "b" * 64
         target = {"id": 7, "tag_name": self.manifest["release"]["tag_name"], "body": marker + "\n\nNotes", "draft": True,
                   "target_commitish": "f" * 40, "prerelease": True, "name": "Test build", "html_url": "https://example/release"}
-        assets = []
+        assets, uploaded = [], {}
         def rows(path):
             return [target] if path.endswith("/releases") else assets
         def upload(repo, release_id, name, data):
+            uploaded[name] = data
             assets.append({"name": name, "state": "uploaded", "digest": f"sha256:{p.digest(data)}", "size": len(data)})
         def patch(method, path, body):
             self.assertEqual((method, body), ("PATCH", {"draft": False, "make_latest": "false"}))
@@ -273,9 +274,9 @@ class HandoffTests(unittest.TestCase):
             return target
         with mock.patch.object(p.r, "rows", side_effect=rows), mock.patch.object(p.r, "upload", side_effect=upload) as uploads, mock.patch.object(p, "gh_json", side_effect=patch) as changes, \
              mock.patch.object(p.r, "api", return_value={"object": {"type": "commit", "sha": "f" * 40}}), \
-             mock.patch.object(p.r, "download_asset", side_effect=lambda repo, asset: (self.handoff / asset["name"]).read_bytes()):
+             mock.patch.object(p.r, "download_asset", side_effect=lambda repo, asset: uploaded[asset["name"]]):
             self.assertEqual(p.github_release(self.handoff, self.manifest)["status"], "published")
-            self.assertEqual(len(assets), len(self.manifest["assets"]) + 2)
+            self.assertEqual(len(assets), len(p.r.public_names(self.manifest)) + 1)
             uploads.reset_mock()
             p.github_release(self.handoff, self.manifest)
             uploads.assert_not_called()
@@ -320,7 +321,7 @@ class HandoffTests(unittest.TestCase):
                 self.assertEqual(body["target_commitish"], "f" * 40)
             if method == "PATCH":
                 self.assertEqual(body, {"draft": False, "make_latest": "legacy"})
-                self.assertEqual(len(assets), len(self.manifest["assets"]) + 2)
+                self.assertEqual(len(assets), len(p.r.public_names(self.manifest)) + 1)
                 target["draft"] = False
             return target
         def upload(repo, release_id, name, data):

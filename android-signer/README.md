@@ -95,3 +95,29 @@ caller edits and reviewed updates on the trusted branch do not change VM policy.
 Only trusted reusable-workflow authorization is supported. Version 3 policy
 requires explicit builder/finalizer identities and contains no authorization mode,
 caller-file digests, or workflow/helper content pins.
+
+
+## Public releases and verification evidence
+
+Each completed source build leaves one public GitHub release. Its APK/AAB files
+keep `ConnectBot-<version>-<profile>` names. Development releases have six assets:
+four Android files, `version_code.txt`, and
+`ConnectBot-<version>-signing-evidence.zip`. Stable releases also keep
+`version-info.txt` for F-Droid.
+
+The archive contains the original signed manifest and Sigstore bundle, receipts,
+provenance, transparency/rotation evidence, mappings, and native debug symbols.
+These are the original authenticated files; the ZIP is a transport container,
+not a separately signed statement. Verify its contents against the signed
+manifest and attestation. To verify a downloaded APK, read `final.sigstore.json`
+from the evidence archive and run `gh attestation verify` with the consuming
+repository and trusted `connectbot/actions/.github/workflows/android-finalize.yml`
+workflow identity.
+
+The finalizer seals an immutable Actions handoff without creating a verification
+release. After publication verifies every public download and the complete archive,
+the publisher removes only receipt-matching staging drafts for that source
+run/attempt/policy. Retrying after cleanup recovers the original signed outputs
+from the public evidence archive and rechecks their receipts and digests. Failed
+Play uploads retry from the immutable handoff and do not require new signatures.
+Original build artifacts must still be available when re-running full finalization.
