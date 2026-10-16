@@ -21,4 +21,4 @@ jobs:
       - name: Verify action contracts and adversarial publishing cases
         run: python3 -m unittest discover -s android-signer/tests -v
       - name: Validate workflow
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/android-signer-ci.yml .github/workflows/android-build.yml .github/workflows/android-finalize.yml .github/workflows/android-publish.yml
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/android-signer-ci.yml .github/workflows/android-attest.yml .github/workflows/android-finalize.yml .github/workflows/android-publish.yml

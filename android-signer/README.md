@@ -5,7 +5,7 @@ signer. Private Android keys stay on the signing appliance. This action runs
 Python standard-library code and pinned Android reference tools; it does not
 build Android applications or hold their signing keys.
 
-For direct composite use, use `connectbot/actions/android-signer@FULL_COMMIT_SHA`. Keep the thin build,
+For legacy content-pin configurations, use `connectbot/actions/android-signer@FULL_COMMIT_SHA`. Keep the thin build,
 attestation, finalization, and publishing workflows in the consuming repository,
 with separate hosted jobs and minimal permissions. Keep its public signing
 policy there too. Moving this composite action does not change reusable workflow
@@ -55,10 +55,46 @@ Android payload preservation, publishing recovery, and argument injection.
 
 ## Trusted reusable workflows
 
-Call `connectbot/actions/.github/workflows/android-build.yml@android-signer-v1`
-for the fixed Android release build and separate provenance jobs. It accepts no
-caller commands, source overrides, or signing digests. Build and attest jobs are
-fresh hosted jobs; Gradle has no provenance credentials.
+Keep application builds in the consuming repository: Java/SDK setup, Gradle tasks,
+flavor matrices, output paths, and release metadata belong beside the application.
+Build jobs must have only `contents: read` permission and no signing secrets or
+provenance credentials. Use fresh hosted runners and disable shared build caches.
+The `build-info` composite command can create release metadata alongside the build.
+
+After the build succeeds, call
+`connectbot/actions/.github/workflows/android-attest.yml@android-signer-v1` once
+per profile:
+
+```yaml
+attest-unsigned:
+  needs: release
+  if: ${{ github.event_name == 'push' }}
+  strategy:
+    matrix:
+      flavor: [oss, google]
+  uses: connectbot/actions/.github/workflows/android-attest.yml@android-signer-v1
+  permissions:
+    contents: read
+    actions: read
+    id-token: write
+    attestations: write
+  with:
+    profile: ${{ matrix.flavor }}
+```
+
+The build must upload `unsigned-PROFILE-ATTEMPT` containing `app.apk` and `app.aab`,
+and `release-support-PROFILE-ATTEMPT` containing `mapping.txt`,
+`native-debug-symbols.zip`, and `build-info.json`, with flat paths. `ATTEMPT` is
+`${{ github.run_attempt }}`. This is a stable handoff contract, independent of
+Gradle task names, project layout, Java versions, and original output filenames.
+A new profile additionally needs independently provisioned signing policy/keys.
+
+The shared attestor accepts only a profile label. It derives repository, run and
+attempt from GitHub, downloads that run's immutable artifacts, checks their file
+sets, and computes the subject digests on a fresh hosted runner. It accepts no
+caller commands, artifact IDs, source overrides, or signing digests and never
+checks out or executes application code. Provenance authenticates the source run
+and output bytes; it does not certify the application's build logic as safe.
 
 The finalizer and publishers are `android-finalize.yml` and `android-publish.yml`
 at the same protected branch. They load the public policy from immutable
