@@ -12,7 +12,7 @@ import test_publishing as fixtures
 p = fixtures.p
 
 
-def identity(workflow="android-build.yml"):
+def identity(workflow="android-attest.yml"):
     return {"repository": "connectbot/actions", "repository_id": 1369420724,
         "workflow": ".github/workflows/" + workflow, "refs": ["refs/heads/android-signer-v1"],
         "authorization": "workflow-identity", "sha256": [], "helpers": {}}
