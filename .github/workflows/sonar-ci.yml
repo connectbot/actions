@@ -2,10 +2,10 @@ name: Sonar workflow tests
 on:
   push:
     branches: [main]
-    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml']
+    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml', 'renovate.json']
   pull_request:
     branches: [main]
-    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml']
+    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml', 'renovate.json']
 permissions:
   contents: read
 jobs:

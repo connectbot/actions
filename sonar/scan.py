@@ -18,6 +18,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 HOST = "https://sonarcloud.io"
+# Renovate updates this version/checksum pair from Homebrew metadata for the SonarSource ZIP.
 SCANNER_VERSION = "8.1.0.6389"
 SCANNER_SHA256 = "ab76ab3c360025e9108be5b55be066f304a164f8b2850d2f2f333915db51bc1b"
 MAX_ARCHIVE = 512 * 1024 * 1024

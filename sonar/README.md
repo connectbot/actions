@@ -151,5 +151,16 @@ lands on its default branch, verify a fork PR receives the App check for its hea
 SHA, including a gate failure that blocks merging. Compare analyzed files and
 coverage at the same commit when migrating from Gradle scanning.
 
-The scanner version/checksum constants are intentionally paired: update both from
-the official SonarSource distribution and run these tests when upgrading.
+Renovate updates `SCANNER_VERSION` and `SCANNER_SHA256` together through the regex
+manager in `renovate.json`. Its custom datasource reads Homebrew's published
+[scanner metadata](https://formulae.brew.sh/api/formula/sonar-scanner.json), which
+contains the version and SHA-256 of the upstream, platform-independent ZIP.
+Updates become available when Homebrew publishes that metadata. The transform
+rejects entries whose URL is not the exact versioned SonarSource ZIP or whose
+checksum is malformed. Scanner downloads still come directly from SonarSource;
+the runtime never fetches a checksum or accepts an unpinned version.
+
+Scanner updates require review (`automerge: false`). The real-scanner smoke test
+runs on the update PR and checks both the archive checksum and configuration
+isolation. For a manual update, change both constants using the official
+SonarSource distribution and run the same tests.
