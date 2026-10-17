@@ -13,7 +13,9 @@ OPTIONS = {
     "seal": ("policy", "bundle"),
     "verify": ("policy", "manifest-sha256"),
     "github": ("policy", "manifest-sha256", "report"),
-    "play": ("policy", "manifest-sha256", "report"),
+    "play": ("policy", "manifest-sha256", "report", "play-track"),
+    "play-route": ("policy", "manifest-sha256"),
+    "verify-play": ("policy", "manifest-sha256", "play-track"),
 }
 
 
@@ -28,6 +30,8 @@ def arguments(environment):
             raise ValueError("Missing Android signer input: " + name)
         # '=' keeps values beginning with '--' from becoming additional options.
         result.append("--" + name + "=" + value)
+    if command == "build-info" and environment.get("SIGNER_VERSION_NAME_FILE"):
+        result.append("--version-name-file=" + environment["SIGNER_VERSION_NAME_FILE"])
     return result
 
 

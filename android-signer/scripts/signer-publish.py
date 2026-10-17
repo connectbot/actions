@@ -69,7 +69,7 @@ def source_identity():
             "ref": os.environ["GITHUB_REF"]}
 
 
-def build_info(out, profile, version_code_file):
+def build_info(out, profile, version_code_file, version_name_file=None):
     require(profile in ("oss", "google"), "unsupported release profile")
     source = source_identity()
     require(r.valid_hash(source["commit"], 40), "invalid build commit")
@@ -78,7 +78,12 @@ def build_info(out, profile, version_code_file):
         title = f"Release {tag}"
     else:
         require(source["ref"] == "refs/heads/main", "unsupported release branch")
-        tag = "git-" + r.run("git", "describe", source["commit"]).decode().strip()
+        if version_name_file:
+            name = version_name_file.read_text().strip()
+            # App Versioning's output is the base name, before flavor suffixes.
+            tag = name if name.startswith("git-") else "git-" + name
+        else:
+            tag = "git-" + r.run("git", "describe", source["commit"]).decode().strip()
         title = tag + ": " + r.run("git", "log", "-1", "--format=%s", source["commit"]).decode().strip()
     require(re.fullmatch(TAG, tag), "unsafe release tag")
     code = int(version_code_file.read_text().strip())
@@ -511,7 +516,49 @@ def bundle_match(bundle, code, sha):
     require(int(bundle["versionCode"]) == code and bundle["sha256"].lower() == sha, "Play version code or bundle hash conflicts")
 
 
-def play_release(client, root, manifest):
+def play_track(manifest):
+    """Choose a testing track from an already verified source, never caller input."""
+    require(manifest["repository"] == "connectbot/connectbot" and manifest["repository_id"] == 123235,
+        "Play publishing is restricted to production ConnectBot")
+    tag = manifest["release"]["tag_name"]
+    maintenance = re.fullmatch(r"v1\.11\.([0-9]+)", tag)
+    if maintenance:
+        patch = int(maintenance[1])
+        require(manifest["source"]["ref"] == "refs/tags/" + tag and not manifest["release"]["prerelease"],
+            "maintenance publication requires an exact stable tag")
+        require(0 <= patch <= 49 and manifest["version_codes"]["google"] == 11100000 + patch * 1000,
+            "maintenance version exceeds its allocated range or differs from tag")
+        return "beta"
+    return "alpha"
+
+
+def validate_play_track(manifest, track):
+    require(track in ("alpha", "beta") and track == play_track(manifest),
+        "Play track differs from verified release source")
+
+
+def superseding_tag(manifest):
+    """An exact version tag owns publication when main and tag builds overlap."""
+    if manifest["source"]["ref"] != "refs/heads/main":
+        return None
+    repo = manifest["repository"]
+    for ref in r.rows(f"repos/{repo}/git/matching-refs/tags/v"):
+        tag = ref["ref"].removeprefix("refs/tags/")
+        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+(?:-alpha)?", tag):
+            continue
+        obj = ref["object"]
+        for _ in range(5):
+            if obj["type"] != "tag":
+                break
+            obj = r.api(f"repos/{repo}/git/tags/{obj['sha']}")["object"]
+        require(obj["type"] == "commit", "version tag does not resolve to a commit")
+        if obj["sha"] == manifest["source"]["commit"]:
+            return tag
+    return None
+
+
+def play_release(client, root, manifest, track_name):
+    validate_play_track(manifest, track_name)
     require(manifest["repository"] == "connectbot/connectbot" and manifest["repository_id"] == 123235, "Play publishing is restricted to production ConnectBot")
     require(load((root / "signer-policy.json").read_bytes())["profiles"]["google"]["package"] == PACKAGE, "Play application differs")
     code = manifest["version_codes"]["google"]
@@ -528,9 +575,9 @@ def play_release(client, root, manifest):
         require(len(existing) <= 1, "ambiguous Play bundle")
         if existing:
             bundle_match(existing[0], code, sha)
-        track = retry_call(lambda: client.request("GET", path + "/tracks/alpha"))
+        track = retry_call(lambda: client.request("GET", path + "/tracks/" + track_name))
         current = [int(v) for release in track.get("releases", []) for v in release.get("versionCodes", [])]
-        outcome = {"destination": "play", "package": PACKAGE, "track": "alpha", "version_code": code, "sha256": sha}
+        outcome = {"destination": "play", "package": PACKAGE, "track": track_name, "version_code": code, "sha256": sha}
         if current and max(current) > code:
             return {**outcome, "status": "superseded"}
         if existing and any(str(code) in release.get("versionCodes", []) and release.get("status") == "completed" for release in track.get("releases", [])):
@@ -557,8 +604,8 @@ def play_release(client, root, manifest):
         require(0 < len(mapping) <= r.MAX_BYTES, "expanded mapping outside bounds")
         for kind, data in (("proguard", mapping), ("nativeCode", (root / f"{prefix}.native-debug-symbols.zip").read_bytes())):
             retry_call(lambda kind=kind, data=data: client.request("POST", path + f"/apks/{code}/deobfuscationFiles/{kind}?uploadType=media", media=data))
-        update = {"track": "alpha", "releases": [{"name": "Version " + manifest["release"]["tag_name"], "versionCodes": [str(code)], "status": "completed"}]}
-        retry_call(lambda: client.request("PUT", path + "/tracks/alpha", update))
+        update = {"track": track_name, "releases": [{"name": "Version " + manifest["release"]["tag_name"], "versionCodes": [str(code)], "status": "completed"}]}
+        retry_call(lambda: client.request("PUT", path + "/tracks/" + track_name, update))
         try:
             client.request("POST", path + ":commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW")
             committed = True
@@ -570,11 +617,11 @@ def play_release(client, root, manifest):
             check_path = f"{base}/{check}"
             try:
                 committed_bundles = client.request("GET", check_path + "/bundles").get("bundles", [])
-                committed_track = client.request("GET", check_path + "/tracks/alpha")
+                committed_track = client.request("GET", check_path + "/tracks/" + track_name)
                 matched = [b for b in committed_bundles if int(b["versionCode"]) == code]
                 require(len(matched) == 1, "uncertain Play commit; bundle not confirmed")
                 bundle_match(matched[0], code, sha)
-                require(any(str(code) in a.get("versionCodes", []) and a.get("status") == "completed" for a in committed_track.get("releases", [])), "uncertain Play commit; alpha not confirmed")
+                require(any(str(code) in a.get("versionCodes", []) and a.get("status") == "completed" for a in committed_track.get("releases", [])), "uncertain Play commit; track not confirmed")
                 committed = True
             finally:
                 try:
@@ -592,7 +639,7 @@ def play_release(client, root, manifest):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("policy", "build-info", "prepare", "seal", "verify", "github", "play"))
+    parser.add_argument("command", choices=("policy", "build-info", "prepare", "seal", "verify", "github", "play", "play-route", "verify-play"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--policy", type=Path)
     parser.add_argument("--source-run", type=int)
@@ -600,9 +647,11 @@ def main():
     parser.add_argument("--tools", type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--version-code-file", type=Path)
+    parser.add_argument("--version-name-file", type=Path)
     parser.add_argument("--manifest-sha256")
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--report", type=Path)
+    parser.add_argument("--play-track", choices=("alpha", "beta"))
     args = parser.parse_args()
     require(args.command in ("policy", "build-info") or args.policy, "explicit central policy snapshot required")
     result = None
@@ -610,7 +659,7 @@ def main():
         fetch_policy(args.out)
     elif args.command == "build-info":
         require(args.profile and args.version_code_file, "profile/version code file required")
-        build_info(args.out, args.profile, args.version_code_file)
+        build_info(args.out, args.profile, args.version_code_file, args.version_name_file)
     elif args.command == "prepare":
         require(args.source_run and args.source_attempt and args.tools, "source run/attempt/tools required")
         r.prepare(args.policy, args.source_run, args.source_attempt, args.out, args.tools.resolve())
@@ -626,10 +675,20 @@ def main():
         r.verify_final_bundle(args.out, args.policy)
     else:
         manifest = verify_handoff(args.out, args.manifest_sha256, args.policy)
-        if args.command == "github":
-            result = github_release(args.out, manifest)
-        elif args.command == "play":
-            result = play_release(Play(os.environ.get("GOOGLE_PLAY_ACCESS_TOKEN")), args.out, manifest)
+        if args.command in ("verify-play", "play"):
+            validate_play_track(manifest, args.play_track)
+        if args.command == "play-route":
+            track = "none" if superseding_tag(manifest) else play_track(manifest)
+            with open(os.environ["GITHUB_OUTPUT"], "a") as outputs:
+                outputs.write(f"play_track={track}\n")
+        elif args.command in ("github", "play"):
+            tag = superseding_tag(manifest)
+            if tag:
+                result = {"destination": args.command, "status": "superseded-by-tag", "tag": tag}
+            elif args.command == "github":
+                result = github_release(args.out, manifest)
+            else:
+                result = play_release(Play(os.environ.get("GOOGLE_PLAY_ACCESS_TOKEN")), args.out, manifest, args.play_track)
     if result is not None:
         require(args.report, "publication report path required")
         args.report.write_bytes(json_bytes(result) + b"\n")

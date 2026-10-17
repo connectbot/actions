@@ -124,3 +124,32 @@ run/attempt/policy. Retrying after cleanup recovers the original signed outputs
 from the public evidence archive and rechecks their receipts and digests. Failed
 Play uploads retry from the immutable handoff and do not require new signatures.
 Original build artifacts must still be available when re-running full finalization.
+
+
+## Parallel ConnectBot release lines
+
+The verified release source selects the Play testing track. Exact stable
+`v1.11.x` tags (patch 0–49, with the matching stable Android code) publish to
+`beta`; other eligible releases retain `alpha`. The `play-route` operation
+verifies the complete handoff before emitting `play_track`. `verify-play` and
+`play` require a `play-track` input and reject destinations that disagree with
+the verified source. Production is not an accepted destination.
+
+Enable `PLAY_ALPHA_ENABLED` and/or `PLAY_BETA_ENABLED` in the consuming repository.
+Jobs use the corresponding `play-alpha` or `play-beta` environment and acquire
+credentials only after verification and destination validation. Both use the
+same application-wide publishing concurrency group. Superseded-release checks
+read only the destination track, so a newer alpha does not block a maintenance
+upload to beta. Promote tested beta bundles through Play Console.
+
+An exact stable or alpha version tag at a main build's commit supersedes that
+main publication, including GitHub publication. Generated `git-*` release tags
+do not suppress new builds. Push a cutover branch and its annotated anchor in
+the same atomic push; adding a tag after publication cannot retroactively undo
+an already published main build.
+
+For `build-info`, pass `version-name-file` alongside `version-code-file` to use
+Gradle's base version name for main release labels. This keeps labels aligned
+with the configured tag filter when maintenance tags enter main's history.
+Older callers that omit this optional input retain the legacy `git describe`
+behavior. Exact source tags remain authoritative for tagged releases.
