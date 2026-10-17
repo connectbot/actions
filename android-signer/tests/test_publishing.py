@@ -473,6 +473,36 @@ class PlayTests(unittest.TestCase):
             client.request("POST", "https://example.org/token-leak")
         self.assertIsNone(p.NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://example.org"))
 
+    def test_http_error_preserves_google_message_and_redacts_credentials(self):
+        client = p.Play("test-only-not-a-credential")
+        path = "applications/org.connectbot/edits/1:commit?changesInReviewBehavior=ERROR_IF_IN_REVIEW"
+        message = "The caller does not have permission.\n" + client.token
+        body = json.dumps({"error": {"code": 403, "message": message}}).encode()
+        error = p.urllib.error.HTTPError("https://androidpublisher.googleapis.com/", 403, "Forbidden", {}, io.BytesIO(body))
+        with mock.patch.object(client.opener, "open", side_effect=error) as request:
+            with self.assertRaises(p.PlayError) as raised:
+                client.request("POST", path)
+        self.assertEqual(raised.exception.status, 403)
+        self.assertIn("The caller does not have permission.", str(raised.exception))
+        self.assertIn("[REDACTED]", str(raised.exception))
+        self.assertNotIn(client.token, str(raised.exception))
+        self.assertNotIn("\n", str(raised.exception))
+        self.assertFalse(p.retryable(raised.exception))
+        request.assert_called_once()
+
+    def test_unusable_http_error_bodies_preserve_original_status(self):
+        client = p.Play("test-only-not-a-credential")
+        for body in (b"not JSON", b"\xff", b"[]", b'{"error": null}',
+                     b'{"error": {"message": 42}}', b"x" * (16 * 1024 + 1)):
+            with self.subTest(body=body[:50]):
+                error = p.urllib.error.HTTPError("https://androidpublisher.googleapis.com/", 503, "Unavailable", {}, io.BytesIO(body))
+                with mock.patch.object(client.opener, "open", side_effect=error):
+                    with self.assertRaises(p.PlayError) as raised:
+                        client.request("GET", "applications/org.connectbot/edits/1/bundles")
+                self.assertEqual(raised.exception.status, 503)
+                self.assertTrue(p.retryable(raised.exception))
+                self.assertNotIn("Google response:", str(raised.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
