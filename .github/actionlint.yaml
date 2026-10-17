@@ -14,3 +14,7 @@ paths:
       # Documented GitHub.com features newer than actionlint 1.7.12.
       - 'property "workflow_(ref|sha)" is not defined in object type'
       - 'specifying action "\$/android-signer" in invalid format'
+  .github/workflows/sonar-analysis.yml:
+    ignore:
+      # GitHub.com job.workflow_sha pins helpers to this reusable workflow revision.
+      - 'property "workflow_sha" is not defined in object type'
