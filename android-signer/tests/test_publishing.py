@@ -258,6 +258,17 @@ class HandoffTests(unittest.TestCase):
         self.assertIn("$(literal)", info["title"])
         self.assertEqual(info["source"]["commit"], self.env["GITHUB_SHA"])
 
+    def test_build_metadata_uses_gradle_anchor_instead_of_nearer_maintenance_tag(self):
+        code, name = self.root / "code.txt", self.root / "name.txt"
+        code.write_text("11150003\n")
+        for version in ("git-v1.12.0-alpha-3-gabcdef0", "v1.12.0-alpha"):
+            name.write_text(version + "\n")
+            with mock.patch.dict(os.environ, self.env, clear=True), mock.patch.object(p.r, "run", return_value=b"Forward port patch") as run:
+                p.build_info(self.root / "support", "google", code, name)
+            run.assert_called_once_with("git", "log", "-1", "--format=%s", self.env["GITHUB_SHA"])
+            info = p.load((self.root / "support/build-info.json").read_bytes())
+            self.assertEqual(info["tag"], version if version.startswith("git-") else "git-" + version)
+
     def test_github_publishes_only_complete_matching_draft_and_is_idempotent(self):
         marker = "Verified Android signing; source run 10/2; commit " + "f" * 40 + "; policy " + "b" * 64
         target = {"id": 7, "tag_name": self.manifest["release"]["tag_name"], "body": marker + "\n\nNotes", "draft": True,
@@ -350,7 +361,8 @@ class HandoffTests(unittest.TestCase):
 
 class FakePlay:
     def __init__(self):
-        self.bundles, self.track, self.edits, self.calls = [], {"releases": []}, {}, []
+        self.bundles, self.tracks, self.edits, self.calls = [], {"alpha": {"releases": []}, "beta": {"releases": []}}, {}, []
+        self.version_code = 101
         self.lost_upload = self.lost_commit = self.review = False
         self.next_id = 0
 
@@ -360,14 +372,14 @@ class FakePlay:
         if path == base and method == "POST":
             self.next_id += 1
             edit = str(self.next_id)
-            self.edits[edit] = [copy.deepcopy(self.bundles), copy.deepcopy(self.track)]
+            self.edits[edit] = [copy.deepcopy(self.bundles), copy.deepcopy(self.tracks)]
             return {"id": edit}
         edit, _, suffix = path[len(base) + 1:].partition("/")
         if ":commit" in edit:
             edit = edit.partition(":")[0]
             if self.review:
                 raise p.PlayError(400)
-            self.bundles, self.track = copy.deepcopy(self.edits[edit])
+            self.bundles, self.tracks = copy.deepcopy(self.edits[edit])
             if self.lost_commit:
                 self.lost_commit = False
                 raise p.PlayError(0)
@@ -375,16 +387,17 @@ class FakePlay:
         if method == "DELETE":
             self.edits.pop(edit, None)
             return {}
-        bundles, track = self.edits[edit]
+        bundles, tracks = self.edits[edit]
         if suffix == "bundles" and method == "GET":
             return {"bundles": bundles}
-        if suffix == "tracks/alpha":
+        if suffix in ("tracks/alpha", "tracks/beta"):
+            name = suffix.split("/")[1]
             if method == "PUT":
-                self.edits[edit][1] = copy.deepcopy(body)
+                tracks[name] = copy.deepcopy(body)
                 return body
-            return track
+            return tracks[name]
         if suffix.startswith("bundles?"):
-            bundle = {"versionCode": 101, "sha256": p.digest(media)}
+            bundle = {"versionCode": self.version_code, "sha256": p.digest(media)}
             bundles.append(bundle)
             if self.lost_upload:
                 self.lost_upload = False
@@ -401,7 +414,8 @@ class PlayTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.manifest = {"repository": "connectbot/connectbot", "repository_id": 123235,
-                         "version_codes": {"google": 101}, "release": {"tag_name": "v1.0.0"}}
+                         "source": {"ref": "refs/tags/v1.0.0", "commit": "f" * 40},
+                         "version_codes": {"google": 101}, "release": {"tag_name": "v1.0.0", "prerelease": False}}
         self.aab = b"upload-key-signed AAB"
         prefix = "ConnectBot-v1.0.0-google"
         for name, data in ((f"{prefix}.aab", self.aab), (f"{prefix}.native-debug-symbols.zip", b"symbols"), (f"{prefix}.mapping.txt.zst", b"compressed mapping")):
@@ -411,11 +425,11 @@ class PlayTests(unittest.TestCase):
 
     def publish(self):
         with mock.patch.object(p.r, "run", return_value=b"verified mapping"):
-            return p.play_release(self.client, self.root, self.manifest)
+            return p.play_release(self.client, self.root, self.manifest, p.play_track(self.manifest))
 
     def test_upload_mapping_symbols_completed_alpha_and_retry(self):
         self.assertEqual(self.publish()["status"], "published")
-        self.assertEqual(self.client.track["releases"], [{"name": "Version v1.0.0", "versionCodes": ["101"], "status": "completed"}])
+        self.assertEqual(self.client.tracks["alpha"]["releases"], [{"name": "Version v1.0.0", "versionCodes": ["101"], "status": "completed"}])
         paths = [path for method, path, body in self.client.calls]
         self.assertTrue(any("/apks/101/deobfuscationFiles/proguard" in path for path in paths))
         self.assertTrue(any("/apks/101/deobfuscationFiles/nativeCode" in path for path in paths))
@@ -424,6 +438,88 @@ class PlayTests(unittest.TestCase):
         self.assertEqual(self.publish()["status"], "already-published")
         self.assertFalse(any(method in ("PUT",) or "deobfuscationFiles" in path or ":commit" in path for method, path, _ in self.client.calls[count:]))
 
+    def maintenance(self):
+        self.manifest["source"]["ref"] = "refs/tags/v1.11.2"
+        self.manifest["release"]["tag_name"] = "v1.11.2"
+        self.manifest["version_codes"]["google"] = self.client.version_code = 11102000
+        for path in list(self.root.glob("ConnectBot-v1.0.0-*")):
+            path.rename(path.with_name(path.name.replace("v1.0.0", "v1.11.2")))
+
+    def test_maintenance_uploads_to_beta_below_newer_alpha(self):
+        self.maintenance()
+        alpha = {"releases": [{"versionCodes": ["11150025"], "status": "completed"}]}
+        self.client.tracks["alpha"] = copy.deepcopy(alpha)
+        result = self.publish()
+        self.assertEqual((result["track"], result["status"]), ("beta", "published"))
+        self.assertEqual(self.client.tracks["alpha"], alpha)
+        self.assertEqual(self.client.tracks["beta"]["releases"][0]["versionCodes"], ["11102000"])
+        self.assertEqual(self.publish()["status"], "already-published")
+        self.assertFalse(any("tracks/alpha" in path for _, path, _ in self.client.calls))
+
+    def test_maintenance_checks_beta_for_superseded_builds(self):
+        self.maintenance()
+        self.client.tracks["beta"] = {"releases": [{"versionCodes": ["11103000"], "status": "completed"}]}
+        self.assertEqual(self.publish()["status"], "superseded")
+        self.assertFalse(any(method == "PUT" or "bundles?" in path for method, path, _ in self.client.calls))
+
+    def test_beta_lost_responses_are_reconciled_on_beta(self):
+        self.maintenance()
+        self.client.lost_upload = self.client.lost_commit = True
+        self.assertEqual(self.publish()["status"], "published")
+        self.assertEqual(self.publish()["status"], "already-published")
+        self.assertFalse(any("tracks/alpha" in path for _, path, _ in self.client.calls))
+
+    def test_wrong_track_and_maintenance_codes_fail_before_network(self):
+        with self.assertRaisesRegex(ValueError, "track differs"):
+            p.play_release(self.client, self.root, self.manifest, "beta")
+        self.maintenance()
+        for track in ("alpha", "production", "../beta", None):
+            with self.subTest(track=track), self.assertRaisesRegex(ValueError, "track differs"):
+                p.play_release(self.client, self.root, self.manifest, track)
+        self.manifest["version_codes"]["google"] = 11150000
+        with self.assertRaisesRegex(ValueError, "allocated range"):
+            self.publish()
+        self.assertFalse(self.client.calls)
+
+    def test_maintenance_requires_stable_tag_source(self):
+        self.maintenance()
+        self.manifest["source"]["ref"] = "refs/heads/main"
+        with self.assertRaisesRegex(ValueError, "exact stable tag"):
+            p.play_track(self.manifest)
+        self.manifest["source"]["ref"] = "refs/tags/v1.11.2"
+        self.manifest["release"]["prerelease"] = True
+        with self.assertRaisesRegex(ValueError, "exact stable tag"):
+            p.play_track(self.manifest)
+
+    def test_exact_tag_suppresses_main_publication_only(self):
+        self.manifest["source"]["ref"] = "refs/heads/main"
+        refs = [{"ref": "refs/tags/v1.12.0-alpha", "object": {"type": "tag", "sha": "a" * 40}}]
+        with mock.patch.object(p.r, "rows", return_value=refs), mock.patch.object(p.r, "api", return_value={
+            "object": {"type": "commit", "sha": "f" * 40}}):
+            self.assertEqual(p.superseding_tag(self.manifest), "v1.12.0-alpha")
+            self.manifest["source"]["commit"] = "e" * 40
+            self.assertIsNone(p.superseding_tag(self.manifest))
+            self.manifest["source"]["ref"] = "refs/tags/v1.12.0-alpha"
+            self.manifest["source"]["commit"] = "f" * 40
+            self.assertIsNone(p.superseding_tag(self.manifest))
+
+    def test_route_and_verify_play_cli_require_verified_source(self):
+        self.maintenance()
+        output = self.root / "outputs"
+        args = ["publisher", "play-route", "--out=" + str(self.root), "--policy=policy", "--manifest-sha256=hash"]
+        with mock.patch("sys.argv", args), mock.patch.object(p, "verify_handoff", return_value=self.manifest) as verify, \
+             mock.patch.object(p, "superseding_tag", return_value=None), mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+            p.main()
+            verify.assert_called_once()
+        self.assertEqual(output.read_text(), "play_track=beta\n")
+        args[1] = "verify-play"
+        args.append("--play-track=alpha")
+        with mock.patch("sys.argv", args), mock.patch.object(p, "verify_handoff", return_value=self.manifest), \
+             mock.patch.object(p, "Play") as client:
+            with self.assertRaisesRegex(ValueError, "track differs"):
+                p.main()
+            client.assert_not_called()
+
     def test_conflicting_bundle_hash_rejected_without_track_update(self):
         self.client.bundles = [{"versionCode": 101, "sha256": "0" * 64}]
         with self.assertRaisesRegex(ValueError, "bundle hash conflicts"):
@@ -431,7 +527,7 @@ class PlayTests(unittest.TestCase):
         self.assertFalse(any(method == "PUT" for method, _, _ in self.client.calls))
 
     def test_older_build_cannot_downgrade_alpha(self):
-        self.client.track = {"releases": [{"versionCodes": ["102"], "status": "completed"}]}
+        self.client.tracks["alpha"] = {"releases": [{"versionCodes": ["102"], "status": "completed"}]}
         self.assertEqual(self.publish()["status"], "superseded")
         self.assertFalse(any(method == "PUT" or "bundles?" in path for method, path, _ in self.client.calls))
 

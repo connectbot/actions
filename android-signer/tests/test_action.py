@@ -25,6 +25,13 @@ class ActionTests(unittest.TestCase):
             "SIGNER_PROFILE": "oss", "SIGNER_VERSION_CODE_FILE": value})
         self.assertEqual(args, ["build-info", "--out=" + value, "--profile=oss", "--version-code-file=" + value])
 
+    def test_optional_version_name_file_is_forwarded_only_for_build_info(self):
+        env = {"SIGNER_COMMAND": "build-info", "SIGNER_OUT": "out", "SIGNER_PROFILE": "google",
+               "SIGNER_VERSION_CODE_FILE": "code", "SIGNER_VERSION_NAME_FILE": "name with spaces"}
+        self.assertEqual(action.arguments(env)[-1], "--version-name-file=name with spaces")
+        env["SIGNER_COMMAND"] = "policy"
+        self.assertEqual(action.arguments(env), ["policy", "--out=out"])
+
     def test_unknown_operation_and_missing_inputs_are_rejected(self):
         for env in ({"SIGNER_COMMAND": "bash"}, {"SIGNER_COMMAND": "prepare", "SIGNER_OUT": "/tmp/output"}):
             with self.assertRaises(ValueError):

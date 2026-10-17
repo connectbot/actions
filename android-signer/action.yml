@@ -3,7 +3,7 @@ description: Prepare build metadata or verify and publish attested Hermit signin
 author: ConnectBot
 inputs:
   command:
-    description: 'Operation: policy, build-info, prepare, seal, verify, github, or play.'
+    description: 'Operation: policy, build-info, prepare, seal, verify, github, play-route, verify-play, or play.'
     required: true
   out:
     description: Output directory or handoff; output file path for policy.
@@ -14,6 +14,8 @@ inputs:
     description: Android flavor for build-info (oss or google).
   version-code-file:
     description: Version code file for build-info.
+  version-name-file:
+    description: Optional Gradle base version name file, keeping release labels aligned with the app version anchor.
   source-run:
     description: Successful source workflow run ID for prepare.
   source-attempt:
@@ -26,7 +28,12 @@ inputs:
     description: Expected release manifest hash for verify/github/play.
   report:
     description: Publication result path for github/play.
+  play-track:
+    description: Expected testing track (alpha or beta), checked against the verified release.
 outputs:
+  play_track:
+    description: Testing track selected from the verified release, or none for a superseded main build.
+    value: ${{ steps.signer.outputs.play_track }}
   manifest_sha256:
     description: Verified publishing manifest digest emitted by seal.
     value: ${{ steps.signer.outputs.manifest_sha256 }}
@@ -43,11 +50,13 @@ runs:
         SIGNER_OUT: ${{ inputs.out }}
         SIGNER_POLICY: ${{ inputs.policy }}
         SIGNER_PROFILE: ${{ inputs.profile }}
+        SIGNER_VERSION_NAME_FILE: ${{ inputs.version-name-file }}
         SIGNER_VERSION_CODE_FILE: ${{ inputs.version-code-file }}
         SIGNER_SOURCE_RUN: ${{ inputs.source-run }}
         SIGNER_SOURCE_ATTEMPT: ${{ inputs.source-attempt }}
         SIGNER_TOOLS: ${{ inputs.tools }}
         SIGNER_BUNDLE: ${{ inputs.bundle }}
         SIGNER_MANIFEST_SHA256: ${{ inputs.manifest-sha256 }}
+        SIGNER_PLAY_TRACK: ${{ inputs.play-track }}
         SIGNER_REPORT: ${{ inputs.report }}
       run: python3 "$SIGNER_ACTION_PATH/scripts/run_action.py"
