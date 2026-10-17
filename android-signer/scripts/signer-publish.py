@@ -29,9 +29,12 @@ POLICY_REPOSITORY_ID = 1215286979
 
 
 def policy_api(path):
-    # Central policy is public. Source-repository tokens never leave their scope.
+    # Authenticate public policy reads to avoid the shared anonymous IP rate limit.
+    token = os.environ.get("GH_TOKEN")
+    require(token, "GH_TOKEN is required to fetch central policy")
     request = urllib.request.Request("https://api.github.com/repos/" + POLICY_REPOSITORY + path,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "connectbot-android-signer"})
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "connectbot-android-signer",
+                 "Authorization": "Bearer " + token})
     with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
         data = response.read(1024 * 1024 + 1)
     require(len(data) <= 1024 * 1024, "central policy response too large")
@@ -442,8 +445,11 @@ def github_release(root, manifest):
 
 
 class PlayError(RuntimeError):
-    def __init__(self, status):
-        super().__init__(f"Google Play request failed (HTTP {status}); edit was not silently committed or resubmitted")
+    def __init__(self, status, detail=None):
+        message = f"Google Play request failed (HTTP {status}); edit was not silently committed or resubmitted"
+        if detail:
+            message += "; Google response: " + json.dumps(detail, ensure_ascii=True)
+        super().__init__(message)
         self.status = status
 
 
@@ -470,7 +476,19 @@ class Play:
                 require(len(content) <= 4 * 1024 * 1024, "Play response too large")
                 return load(content) if content else {}
         except urllib.error.HTTPError as error:
-            raise PlayError(error.code) from None
+            detail = None
+            try:
+                with error:
+                    content = error.read(16 * 1024 + 1)
+                if len(content) <= 16 * 1024:
+                    payload = json.loads(content)
+                    problem = payload.get("error") if isinstance(payload, dict) else None
+                    message = problem.get("message") if isinstance(problem, dict) else None
+                    if isinstance(message, str):
+                        detail = message.replace(self.token, "[REDACTED]")[:2000]
+            except (ValueError, OSError):
+                pass
+            raise PlayError(error.code, detail) from None
         except (urllib.error.URLError, TimeoutError, ConnectionError):
             raise PlayError(0) from None
 

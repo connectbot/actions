@@ -18,6 +18,26 @@ class PolicyTests(unittest.TestCase):
     setUp = fixtures.HandoffTests.setUp
     populate = fixtures.HandoffTests.populate
     refresh = fixtures.HandoffTests.refresh
+    def test_policy_api_authenticates_public_reads_without_following_redirects(self):
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "job-token"}, clear=True), \
+             mock.patch.object(p.urllib.request, "build_opener") as build_opener:
+            opener = build_opener.return_value
+            opener.open.return_value.__enter__.return_value.read.return_value = b'{"id": 42}'
+            self.assertEqual(p.policy_api("/branches/main"), {"id": 42})
+        self.assertIsInstance(build_opener.call_args.args[0], p.NoRedirect)
+        request = opener.open.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.github.com/repos/connectbot/.github/branches/main")
+        self.assertEqual(request.get_header("Authorization"), "Bearer job-token")
+        self.assertEqual(opener.open.call_args.kwargs, {"timeout": 30})
+
+    def test_policy_api_rejects_missing_or_empty_token_before_network_access(self):
+        for env in ({}, {"GH_TOKEN": ""}):
+            with self.subTest(env=env), mock.patch.dict(os.environ, env, clear=True), \
+                 mock.patch.object(p.urllib.request, "build_opener") as build_opener:
+                with self.assertRaisesRegex(ValueError, "GH_TOKEN is required"):
+                    p.policy_api("")
+                build_opener.assert_not_called()
+
     def responses(self, policy=None):
         data = p.json_bytes(policy or self.policy)
         return [{"id": p.POLICY_REPOSITORY_ID}, {"protected": True, "commit": {"sha": "a" * 40}},

@@ -37,6 +37,7 @@ runs:
       id: signer
       shell: bash
       env:
+        GH_TOKEN: ${{ github.token }}
         SIGNER_ACTION_PATH: ${{ github.action_path }}
         SIGNER_COMMAND: ${{ inputs.command }}
         SIGNER_OUT: ${{ inputs.out }}
