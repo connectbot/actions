@@ -25,9 +25,12 @@ Operations:
 The `policy` operation writes the central policy snapshot. All verification and
 publication operations require its explicit path; there is no local policy
 fallback. `seal` emits
-`manifest_sha256`. Callers provide Java 25 for `prepare`, GitHub CLI and
-`GH_TOKEN` for network operations, and a short-lived `GOOGLE_PLAY_ACCESS_TOKEN`
-for `play`. Verify the handoff with `verify` before requesting Google credentials.
+`manifest_sha256`. The composite action supplies the built-in `github.token` as
+`GH_TOKEN`, including for public central policy reads, to avoid GitHub's shared
+anonymous IP rate limit. No additional token secret is needed. Direct script
+invocations must supply `GH_TOKEN` for network operations. Callers provide Java 25
+for `prepare`, GitHub CLI, and a short-lived `GOOGLE_PLAY_ACCESS_TOKEN` for `play`.
+Verify the handoff with `verify` before requesting Google credentials.
 Play publishing is restricted by the consumer workflow to its alpha environment;
 the helper additionally enforces package `org.connectbot` and track `alpha`.
 
