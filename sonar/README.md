@@ -117,7 +117,9 @@ be overridden. There is no arbitrary-arguments or command hook.
 
 The helper validates repository, producer workflow ID/path, run ID, attempt,
 conclusion, PR head repository/branch/SHA, and artifact identity through GitHub's
-API. Forks with empty PR associations are resolved through the commit-to-PR API;
+API. Forks with empty PR associations are resolved through the commit-to-PR API,
+then an open-PR lookup by fork owner and branch if that index is also empty. All
+candidates must pass the same repository, branch, SHA, and open-state checks;
 ambiguous matches fail. It rechecks the current head before submitting analysis.
 Closed PRs and superseded runs skip without manufacturing a passing check. Missing,
 expired, duplicate, oversized, or invalid artifacts fail validation.

@@ -151,6 +151,11 @@ def resolve(api, event, workflow):
         numbers = [pr["number"] for pr in run.get("pull_requests", [])]
         if not numbers:
             numbers = [pr["number"] for pr in api.pages(f"/commits/{sha}/pulls")]
+        if not numbers:
+            # GitHub can also omit fork commits from the commit-to-PR index.
+            owner = run["head_repository"]["full_name"].split("/", 1)[0]
+            query = urllib.parse.urlencode({"state": "open", "head": f"{owner}:{run['head_branch']}"})
+            numbers = [pr["number"] for pr in api.pages(f"/pulls?{query}")]
         matches = []
         for number in set(numbers):
             pr = api.get(f"/pulls/{int(number)}")
@@ -161,7 +166,7 @@ def resolve(api, event, workflow):
                     and pr["head"]["ref"] == run["head_branch"]):
                 matches.append(pr)
         if not matches:
-            raise Skip("The PR is closed or its head has changed.")
+            raise Skip("No open PR matches the producer repository, branch, and commit.")
         require(len(matches) == 1, "Ambiguous pull request identity")
         pr = matches[0]
         context.update(pr=pr["number"], branch=safe_ref(pr["head"]["ref"]),

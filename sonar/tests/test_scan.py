@@ -36,6 +36,8 @@ class FakeAPI:
                            "size_in_bytes": 100, "workflow_run": {"id": 42, "head_sha": SHA}}]
         self.refs = SHA
         self.associations = [{"number": 12}]
+        self.head_associations = []
+        self.page_requests = []
 
     def get(self, path):
         if path == "/actions/runs/42":
@@ -47,7 +49,14 @@ class FakeAPI:
         raise AssertionError(path)
 
     def pages(self, path, key=None):
-        return copy.deepcopy(self.artifacts if key else self.associations)
+        self.page_requests.append(path)
+        if path == "/actions/runs/42/artifacts" and key == "artifacts":
+            return copy.deepcopy(self.artifacts)
+        if path == f"/commits/{SHA}/pulls":
+            return copy.deepcopy(self.associations)
+        if path.startswith("/pulls?"):
+            return copy.deepcopy(self.head_associations)
+        raise AssertionError(path)
 
 
 class DownloadTest(unittest.TestCase):
@@ -97,6 +106,68 @@ class ResolveTest(unittest.TestCase):
     def test_fork_with_empty_associations(self):
         self.assertEqual(self.resolve(), {"sha": SHA, "run_id": 42, "attempt": 1,
                                          "pr": 12, "branch": "feature", "base": "main"})
+
+    def test_fork_with_no_run_or_commit_associations(self):
+        self.api.associations = []
+        self.api.head_associations = [{"number": 12}]
+        self.assertEqual(self.resolve(), {"sha": SHA, "run_id": 42, "attempt": 1,
+                                         "pr": 12, "branch": "feature", "base": "main"})
+        self.assertEqual(self.api.page_requests,
+                         [f"/commits/{SHA}/pulls", "/pulls?state=open&head=contributor%3Afeature"])
+
+    def test_head_lookup_encodes_branch_query(self):
+        self.api.associations = []
+        self.api.head_associations = [{"number": 12}]
+        branch = "feature/fix&base=other#part"
+        self.api.run["head_branch"] = branch
+        self.api.pr["head"]["ref"] = branch
+        self.assertEqual(self.resolve()["branch"], branch)
+        self.assertEqual(self.api.page_requests[-1],
+                         "/pulls?state=open&head=contributor%3Afeature%2Ffix%26base%3Dother%23part")
+
+    def test_head_lookup_preserves_identity_validation(self):
+        changes = [
+            ("state", "closed"),
+            ("head.sha", "b" * 40),
+            ("head.ref", "other"),
+            ("head.repo.full_name", "other/example"),
+            ("head.repo", None),
+            ("base.repo.full_name", "other/example"),
+        ]
+        original = copy.deepcopy(self.api.pr)
+        self.api.associations = []
+        self.api.head_associations = [{"number": 12}]
+        for field, value in changes:
+            with self.subTest(field=field):
+                self.api.pr = copy.deepcopy(original)
+                target = self.api.pr
+                parts = field.split(".")
+                for part in parts[:-1]:
+                    target = target[part]
+                target[parts[-1]] = value
+                with self.assertRaises(scan.Skip):
+                    self.resolve()
+
+    def test_head_lookup_rejects_ambiguous_matches(self):
+        self.api.associations = []
+        self.api.head_associations = [{"number": 12}, {"number": 13}]
+        with self.assertRaises(scan.Invalid):
+            self.resolve()
+
+    def test_head_lookup_with_no_matches_skips(self):
+        self.api.associations = []
+        with self.assertRaises(scan.Skip):
+            self.resolve()
+        self.assertEqual(self.api.page_requests[-1],
+                         "/pulls?state=open&head=contributor%3Afeature")
+
+    def test_existing_associations_do_not_need_head_lookup(self):
+        self.api.run["pull_requests"] = [{"number": 12}]
+        self.assertEqual(self.resolve()["pr"], 12)
+        self.assertEqual(self.api.page_requests, [])
+        self.api.run["pull_requests"] = []
+        self.assertEqual(self.resolve()["pr"], 12)
+        self.assertEqual(self.api.page_requests, [f"/commits/{SHA}/pulls"])
 
     def test_same_repository(self):
         self.api.run["pull_requests"] = [{"number": 12}]
