@@ -1,0 +1,79 @@
+name: Isolated SonarCloud analysis
+on:
+  workflow_call:
+    inputs:
+      producer_workflow:
+        description: Exact path of the workflow that produced the analysis inputs
+        type: string
+        default: .github/workflows/ci.yml
+      artifact_prefix:
+        description: Artifact name prefix; the producer run attempt is appended
+        type: string
+        default: sonar-inputs
+      config_path:
+        description: Analysis configuration from the consumer default-branch revision
+        type: string
+        default: .github/sonar.json
+    secrets:
+      SONAR_TOKEN:
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  analyze:
+    name: Analyze prebuilt sources
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SONAR_PRODUCER_WORKFLOW: ${{ inputs.producer_workflow }}
+      SONAR_ARTIFACT_PREFIX: ${{ inputs.artifact_prefix }}
+      SONAR_CONFIG: ${{ github.workspace }}/trusted-config/${{ inputs.config_path }}
+      ANALYSIS_ROOT: ${{ github.workspace }}/sonar-analysis
+    steps:
+      - name: Checkout trusted scanner helpers
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: connectbot/actions
+          ref: ${{ job.workflow_sha }}
+          path: scanner-helpers
+          sparse-checkout: sonar
+          persist-credentials: false
+
+      - name: Checkout trusted configuration
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: trusted-config
+          sparse-checkout: ${{ inputs.config_path }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Set up scanner Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: zulu
+          java-version: '21'
+
+      - name: Validate run, source, reports, and bytecode
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scanner-helpers/sonar/scan.py prepare --root "$ANALYSIS_ROOT"
+
+      - name: Recheck current head before authenticated analysis
+        if: steps.prepare.outputs.ready == 'true'
+        id: recheck
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scanner-helpers/sonar/scan.py recheck --root "$ANALYSIS_ROOT"
+
+      - name: Analyze without executing project code
+        if: steps.recheck.outputs.ready == 'true'
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: python3 scanner-helpers/sonar/scan.py scan --root "$ANALYSIS_ROOT"
