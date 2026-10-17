@@ -12,12 +12,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class WorkflowTests(unittest.TestCase):
-    def test_publishers_verify_before_google_authentication_and_only_target_alpha(self):
+    def test_publishers_verify_before_google_authentication_and_route_testing_tracks(self):
         workflow = (ROOT / ".github/workflows/android-publish.yml").read_text()
-        self.assertLess(workflow.index("command: verify"), workflow.index("google-github-actions/auth@"))
+        self.assertLess(workflow.index("command: verify-play"), workflow.index("google-github-actions/auth@"))
         self.assertIn("project_id: api-4664730880327298161-873945", workflow)
         self.assertIn("github.repository_id == '123235'", workflow)
-        self.assertIn("environment: play-alpha", workflow)
+        self.assertIn("environment: ${{ format('play-{0}', needs.play-route.outputs.track) }}", workflow)
+        self.assertIn("vars.PLAY_BETA_ENABLED", workflow)
+        self.assertIn("group: publish-play-org-connectbot\n", workflow)
+        self.assertIn("command: play-route", workflow)
+        self.assertNotIn("production", workflow)
         self.assertNotIn("credentials_json", workflow)
         self.assertNotIn("attestations: write", workflow)
         self.assertNotIn("id-token: write", workflow.split("  play:")[0])

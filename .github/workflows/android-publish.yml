@@ -50,13 +50,46 @@ jobs:
           name: github-publication-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/github-publication.json
           if-no-files-found: error
+  play-route:
+    if: ${{ (vars.PLAY_ALPHA_ENABLED == 'true' || vars.PLAY_BETA_ENABLED == 'true') && github.repository == 'connectbot/connectbot' && github.repository_id == '123235' && github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      track: ${{ steps.route.outputs.play_track }}
+    steps:
+      - name: Load approved organization policy
+        uses: $/android-signer
+        with:
+          command: policy
+          out: ${{ runner.temp }}/signer-policy.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ inputs.artifact_id }}
+          path: ${{ runner.temp }}/publish
+          merge-multiple: true
+      - name: Select track from verified publishing handoff
+        id: route
+        uses: $/android-signer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SIGNER_JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
+          SIGNER_JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        with:
+          command: play-route
+          policy: ${{ runner.temp }}/signer-policy.json
+          out: ${{ runner.temp }}/publish
+          manifest-sha256: ${{ inputs.manifest_sha256 }}
   play:
-    if: ${{ vars.PLAY_ALPHA_ENABLED == 'true' && github.repository == 'connectbot/connectbot' && github.repository_id == '123235' && github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    environment: play-alpha
+    needs: play-route
+    if: ${{ (needs.play-route.outputs.track == 'alpha' && vars.PLAY_ALPHA_ENABLED == 'true') || (needs.play-route.outputs.track == 'beta' && vars.PLAY_BETA_ENABLED == 'true') }}
+    environment: ${{ format('play-{0}', needs.play-route.outputs.track) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:
-      group: publish-play-org-connectbot-alpha
+      group: publish-play-org-connectbot
       cancel-in-progress: false
     permissions:
       contents: read
@@ -80,7 +113,8 @@ jobs:
           SIGNER_JOB_WORKFLOW_REF: ${{ job.workflow_ref }}
           SIGNER_JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
         with:
-          command: verify
+          command: verify-play
+          play-track: ${{ needs.play-route.outputs.track }}
           policy: ${{ runner.temp }}/signer-policy.json
           out: ${{ runner.temp }}/publish
           manifest-sha256: ${{ inputs.manifest_sha256 }}
@@ -95,7 +129,7 @@ jobs:
           access_token_scopes: https://www.googleapis.com/auth/androidpublisher
           create_credentials_file: false
           export_environment_variables: false
-      - name: Publish verified Google bundle to alpha
+      - name: Publish verified Google bundle to selected testing track
         uses: $/android-signer
         env:
           GH_TOKEN: ${{ github.token }}
@@ -104,6 +138,7 @@ jobs:
           GOOGLE_PLAY_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
         with:
           command: play
+          play-track: ${{ needs.play-route.outputs.track }}
           policy: ${{ runner.temp }}/signer-policy.json
           out: ${{ runner.temp }}/publish
           manifest-sha256: ${{ inputs.manifest_sha256 }}
