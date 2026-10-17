@@ -29,9 +29,12 @@ POLICY_REPOSITORY_ID = 1215286979
 
 
 def policy_api(path):
-    # Central policy is public. Source-repository tokens never leave their scope.
+    # Authenticate public policy reads to avoid the shared anonymous IP rate limit.
+    token = os.environ.get("GH_TOKEN")
+    require(token, "GH_TOKEN is required to fetch central policy")
     request = urllib.request.Request("https://api.github.com/repos/" + POLICY_REPOSITORY + path,
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "connectbot-android-signer"})
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "connectbot-android-signer",
+                 "Authorization": "Bearer " + token})
     with urllib.request.build_opener(NoRedirect()).open(request, timeout=30) as response:
         data = response.read(1024 * 1024 + 1)
     require(len(data) <= 1024 * 1024, "central policy response too large")
