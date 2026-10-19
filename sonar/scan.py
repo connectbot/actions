@@ -19,8 +19,8 @@ import zipfile
 
 HOST = "https://sonarcloud.io"
 # Renovate updates this version/checksum pair from Homebrew metadata for the SonarSource ZIP.
-SCANNER_VERSION = "8.1.0.6389"
-SCANNER_SHA256 = "ab76ab3c360025e9108be5b55be066f304a164f8b2850d2f2f333915db51bc1b"
+SCANNER_VERSION = "8.2.0.6438"
+SCANNER_SHA256 = "2f1f412ad4c36d23266371367e13214fea03add397fb789bbb3282fdc9fb1372"
 MAX_ARCHIVE = 512 * 1024 * 1024
 MAX_EXPANDED = 1024 * 1024 * 1024
 MAX_FILE = 128 * 1024 * 1024
