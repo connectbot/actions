@@ -105,7 +105,7 @@ def verify_finalizer_certificate(policy, certificate):
 
 
 def validate_policy(policy):
-    require(policy.get("version") == 3 and policy.get("visibility") == "public", "version 3 public release policy required")
+    require(policy.get("version") in (3, 4) and policy.get("visibility") == "public", "version 3 public release policy required")
     require(all(k in policy for k in ("builder", "finalizer", "callers")), "required policy identities missing")
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", policy["repository"]), "invalid repository")
     require(isinstance(policy["repository_id"], int) and policy["repository_id"] > 0, "invalid repository ID")
@@ -147,11 +147,24 @@ def verify_receipt(envelope, policy):
         (root / "pub.pem").write_bytes(run("openssl", "x509", "-inform", "DER", "-in", root / "cert.der", "-pubkey", "-noout"))
         run("openssl", "dgst", "-sha256", "-verify", root / "pub.pem", "-signature", root / "sig", root / "pae")
     statement = load(payload)
-    require(statement["_type"] == "https://in-toto.io/Statement/v1" and statement["predicateType"] == "urn:android-signer:receipt:v2", "unsupported receipt statement")
+    require(statement["_type"] == "https://in-toto.io/Statement/v1" and statement["predicateType"] == ("urn:android-signer:receipt:v3" if policy["version"] == 4 else "urn:android-signer:receipt:v2"), "unsupported receipt statement")
     receipt = statement["predicate"]
-    require(receipt["version"] == 2, "unsupported receipt version")
+    require(receipt["version"] == (3 if policy["version"] == 4 else 2), "unsupported receipt version")
     require(statement["subject"] == [{"name": o["name"], "digest": {"sha256": o["sha256"]}} for o in receipt["outputs"]], "receipt subject differs")
     return receipt
+
+
+def verify_trust_evidence(receipt, files, policy):
+    if policy["version"] == 4:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("signer_trust_evidence", Path(__file__).with_name("trust_evidence.py"))
+        verifier = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(verifier)
+        require("trust-evidence.json" in files, "trust evidence missing")
+        binding = verifier.verify(files["trust-evidence.json"], receipt, policy["trust_authority"])
+        require(all(receipt["provenance"][kind]["trust_root_sha256"] == binding["target_sha256"] for kind in ("apk", "aab")), "provenance trust root differs from authenticated evidence")
+    else:
+        require(receipt.get("trust") is None, "legacy receipt cannot claim dynamic trust")
 
 
 def validate_transaction(receipt, policy, source_run, profile):
@@ -322,6 +335,7 @@ def recover_published(policy, source_run, releases, publication=None):
                 data = evidence[key]
             require(len(data) == output['bytes'] and digest(data) == output['sha256'], 'published signing output differs')
             files[output_name] = data
+        verify_trust_evidence(receipt, files, policy)
         found[profile] = (receipt, files)
     return found
 
@@ -359,6 +373,7 @@ def wait_staging(policy, source_run, timeout):
             plain = download_asset(policy["repository"], by_name["signing-receipt.json"])
             require(load(plain) == receipt, "plain receipt differs")
             files.update({"signing-receipt.dsse.json": envelope, "signing-receipt.json": plain})
+            verify_trust_evidence(receipt, files, policy)
             found[profile] = (receipt, files)
         if pending - found.keys():
             recovered = recover_published(policy, source_run, releases)

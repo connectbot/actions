@@ -157,7 +157,7 @@ def package_release(out, policy_path):
         add_asset(root, assets, f"{prefix}.mapping.txt.zst", r.run("zstd", "-q", "-c", "--no-progress", directory / "mapping.txt"))
         add_asset(root, assets, f"provenance-{profile}.json", (directory / "unsigned-aab.sigstore.json").read_bytes())
         for name in ("signing-receipt.dsse.json", "signing-receipt.json", "code_transparency_signed.jwt", "transparency-certificate.der",
-                     "apk-lineage.bin", "apk-hybrid-rsa-lineage.bin", "apk-hybrid-pqc-lineage.bin", "apk-effective-lineage.bin"):
+                     "trust-evidence.json", "apk-lineage.bin", "apk-hybrid-rsa-lineage.bin", "apk-hybrid-pqc-lineage.bin", "apk-effective-lineage.bin"):
             if (directory / name).exists():
                 add_asset(root, assets, f"{profile}-{name}", (directory / name).read_bytes())
         dependencies.append({"uri": f"https://github.com/{policy['repository']}/actions/artifacts/{artifact['id']}",
