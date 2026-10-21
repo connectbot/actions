@@ -23,7 +23,7 @@ concurrency:
 jobs:
   attest:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       artifact_id: ${{ steps.handoff.outputs.artifact-id }}
@@ -39,10 +39,6 @@ jobs:
         with:
           command: policy
           out: ${{ runner.temp }}/signer-policy.json
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: zulu
-          java-version: '25'
       - name: Verify both signing transactions
         uses: $/android-signer
         env:

@@ -1,4 +1,8 @@
 paths:
+  .github/workflows/android-attest.yml:
+    ignore:
+      # GitHub.com self-repository references are newer than actionlint 1.7.12.
+      - 'specifying action "\$/android-signer/runtime" in invalid format'
   .github/workflows/publish-maven.yml:
     ignore:
       # GitHub.com documents job.workflow_sha, but actionlint 1.7.12 predates it.
@@ -14,3 +18,7 @@ paths:
       # Documented GitHub.com features newer than actionlint 1.7.12.
       - 'property "workflow_(ref|sha)" is not defined in object type'
       - 'specifying action "\$/android-signer" in invalid format'
+  .github/workflows/sonar-analysis.yml:
+    ignore:
+      # GitHub.com job.workflow_sha pins helpers to this reusable workflow revision.
+      - 'property "workflow_sha" is not defined in object type'

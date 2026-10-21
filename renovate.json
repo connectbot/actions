@@ -7,9 +7,43 @@
   "packageRules": [
     {
       "description": "Keep this repository's own actions tracking their branch",
-      "matchManagers": ["github-actions"],
-      "matchPackageNames": ["connectbot/actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
+      "matchPackageNames": [
+        "connectbot/actions"
+      ],
       "pinDigests": false
+    },
+    {
+      "description": "Update the scanner ZIP version and SHA-256 together for review",
+      "matchDatasources": [
+        "custom.sonar-scanner"
+      ],
+      "pinDigests": true,
+      "automerge": false
     }
-  ]
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^sonar/scan\\.py$/"
+      ],
+      "matchStrings": [
+        "SCANNER_VERSION = \"(?<currentValue>[0-9.]+)\"\\nSCANNER_SHA256 = \"(?<currentDigest>[a-f0-9]{64})\""
+      ],
+      "depNameTemplate": "sonar-scanner-cli",
+      "datasourceTemplate": "custom.sonar-scanner",
+      "versioningTemplate": "loose"
+    }
+  ],
+  "customDatasources": {
+    "sonar-scanner": {
+      "defaultRegistryUrlTemplate": "https://formulae.brew.sh/api/formula/sonar-scanner.json",
+      "transformTemplates": [
+        "($version := versions.stable; $archive := urls.stable; {\"releases\": ($exists($match($version, /^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$/)) and $archive.url = \"https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-\" & $version & \".zip\" and $exists($match($archive.checksum, /^[a-f0-9]{64}$/))) ? [{\"version\": $version, \"digest\": $archive.checksum}] : [], \"sourceUrl\": \"https://github.com/SonarSource/sonar-scanner-cli\"})"
+      ]
+    }
+  }
 }

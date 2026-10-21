@@ -1,0 +1,29 @@
+name: Sonar workflow tests
+on:
+  push:
+    branches: [main]
+    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml', 'renovate.json']
+  pull_request:
+    branches: [main]
+    paths: ['sonar/**', '.github/workflows/sonar-*.yml', '.github/actionlint.yaml', 'renovate.json']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up scanner Java
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: zulu
+          java-version: '21'
+      - name: Validate workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/sonar-analysis.yml .github/workflows/sonar-ci.yml
+      - name: Test authorization, hostile inputs, and real scanner configuration isolation
+        env:
+          SONAR_SCANNER_INTEGRATION: '1'
+        run: python3 -m unittest discover -s sonar/tests -v

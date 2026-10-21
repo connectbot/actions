@@ -9,18 +9,18 @@ permissions:
 jobs:
   test:
     name: Android signer contract tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      - uses: ./android-signer/runtime
         with:
-          python-version: '3.15'
+          tools: python java
       - name: Install hash-pinned trust verifier dependencies
-        run: python3 -m pip install --require-hashes -r android-signer/scripts/trust-requirements.txt
+        run: bash android-signer/scripts/install-trust.sh "$RUNNER_TEMP/signer-trust-venv"
       - name: Verify action contracts and adversarial publishing cases
-        run: python3 -m unittest discover -s android-signer/tests -v
+        run: '"$RUNNER_TEMP/signer-trust-venv/bin/python" -m unittest discover -s android-signer/tests -v'
       - name: Validate workflow
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/android-signer-ci.yml .github/workflows/android-attest.yml .github/workflows/android-finalize.yml .github/workflows/android-publish.yml

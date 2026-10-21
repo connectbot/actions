@@ -2,16 +2,45 @@
 # Copyright 2026 Kenny Root
 from pathlib import Path
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class WorkflowTests(unittest.TestCase):
+    def test_signer_and_ci_use_the_same_locked_runtime(self):
+        runtime = ROOT / "android-signer/runtime"
+        config = tomllib.loads((runtime / "mise.toml").read_text())
+        lock = tomllib.loads((runtime / "mise.lock").read_text())
+        for name, version in config["tools"].items():
+            self.assertRegex(version, r"\d+\.\d+\.\d+")
+            entry, = lock["tools"][name]
+            self.assertEqual(entry["version"], version)
+            platform = entry["platforms.linux-x64"]
+            self.assertTrue(platform["url"].startswith("https://"))
+            self.assertRegex(platform["checksum"], r"^sha256:[0-9a-f]{64}$")
+        setup = (runtime / "action.yml").read_text()
+        self.assertRegex(setup, r"uses: jdx/mise-action@[0-9a-f]{40}")
+        self.assertRegex(setup, r"version: \d{4}\.\d+\.\d+")
+        for setting in ("working_directory: ${{ github.action_path }}", "install_args: --locked",
+                        "cache: false", "add_shims_to_path: false"):
+            self.assertIn(setting, setup)
+        action = (ROOT / "android-signer/action.yml").read_text()
+        self.assertIn("uses: $/android-signer/runtime", action)
+        self.assertIn("uses: $/android-signer/runtime", self.attestor())
+        ci = (ROOT / ".github/workflows/android-signer-ci.yml").read_text()
+        self.assertIn("uses: ./android-signer/runtime", ci)
+        self.assertIn("tools: python java", ci)
+        for name in ("android-attest.yml", "android-finalize.yml", "android-publish.yml", "android-signer-ci.yml"):
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            self.assertEqual(set(re.findall(r"runs-on: (.+)", workflow)), {"ubuntu-24.04"})
+
     def test_publishers_verify_before_google_authentication_and_route_testing_tracks(self):
         workflow = (ROOT / ".github/workflows/android-publish.yml").read_text()
         self.assertLess(workflow.index("command: verify-play"), workflow.index("google-github-actions/auth@"))
@@ -44,7 +73,7 @@ class WorkflowTests(unittest.TestCase):
                           "setup-gradle@", "secrets:", "run-id:", "repository:",
                           "artifact-ids:", "pattern:", "merge-multiple:", "continue-on-error:"):
             self.assertNotIn(forbidden, workflow)
-        self.assertIn("runs-on: ubuntu-latest", job)
+        self.assertIn("runs-on: ubuntu-24.04", job)
         self.assertIn("github.event_name == 'push'", job)
         for artifact in ("unsigned", "release-support", "provenance"):
             self.assertIn("name: " + artifact + "-${{ inputs.profile }}-${{ github.run_attempt }}", job)
