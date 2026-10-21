@@ -11,6 +11,22 @@ publication. Their policy loader always reads the centrally governed
 The composite action provides metadata and verification operations to these
 workflows. Application build jobs use only its `build-info` operation.
 
+The signer, unsigned attestor, and CI share `android-signer/runtime/action.yml`.
+It uses SHA-pinned `mise-action` and mise 2026.10.9 to install Python 3.14.7
+and, for finalization, Zulu 25.36.205.0 (JDK 25.0.4.1) from `runtime/mise.toml` and
+`runtime/mise.lock`. Installs require the lockfile and its archive checksums;
+Python source builds and restored tool caches are disabled. The action exports
+the installed tool directories to PATH without enabling caller-dependent mise
+shims. The reusable workflows and CI select Ubuntu 24.04; hosted image patches
+still update within that Ubuntu release.
+
+The shared dependency installer pins pip 26.0.1 by wheel hash, then installs
+exact-version, hash-pinned trust dependencies in a fresh virtual environment.
+Source builds and implicit dependency resolution are disabled, and `pip check`
+verifies the dependency closure. Update the mise configuration, generated
+lockfile, and wheel hashes together; CI installs the same runtime and dependencies
+before running the verifier tests.
+
 Operations:
 
 | Command | Required inputs besides `command` and `out` |
@@ -28,8 +44,9 @@ fallback. `seal` emits
 `manifest_sha256`. The composite action supplies the built-in `github.token` as
 `GH_TOKEN`, including for public central policy reads, to avoid GitHub's shared
 anonymous IP rate limit. No additional token secret is needed. Direct script
-invocations must supply `GH_TOKEN` for network operations. Callers provide Java 25
-for `prepare`, GitHub CLI, and a short-lived `GOOGLE_PLAY_ACCESS_TOKEN` for `play`.
+invocations must supply `GH_TOKEN` for network operations and Java 25 for
+`prepare`; the composite action supplies Java. Callers provide GitHub CLI and a
+short-lived `GOOGLE_PLAY_ACCESS_TOKEN` for `play`.
 Verify the handoff with `verify` before requesting Google credentials.
 Play publishing is restricted by the consumer workflow to its alpha environment;
 the helper additionally enforces package `org.connectbot` and track `alpha`.

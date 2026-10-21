@@ -40,6 +40,10 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Set up locked signer tools
+      uses: $/android-signer/runtime
+      with:
+        tools: ${{ inputs.command == 'prepare' && 'python java' || 'python' }}
     - name: Run Android signing helper
       id: signer
       shell: bash
@@ -61,8 +65,7 @@ runs:
         SIGNER_REPORT: ${{ inputs.report }}
       run: |
         if [[ -n "$SIGNER_POLICY" ]] && python3 -c 'import json, os, sys; sys.exit(json.load(open(os.environ["SIGNER_POLICY"])).get("version") != 4)'; then
-          python3 -m venv --clear "$RUNNER_TEMP/signer-trust-venv"
-          "$RUNNER_TEMP/signer-trust-venv/bin/pip" install --disable-pip-version-check --timeout 30 --retries 3 --require-hashes -r "$SIGNER_ACTION_PATH/scripts/trust-requirements.txt"
+          bash "$SIGNER_ACTION_PATH/scripts/install-trust.sh" "$RUNNER_TEMP/signer-trust-venv"
           "$RUNNER_TEMP/signer-trust-venv/bin/python" "$SIGNER_ACTION_PATH/scripts/run_action.py"
         else
           python3 "$SIGNER_ACTION_PATH/scripts/run_action.py"

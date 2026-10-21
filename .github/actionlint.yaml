@@ -1,4 +1,8 @@
 paths:
+  .github/workflows/android-attest.yml:
+    ignore:
+      # GitHub.com self-repository references are newer than actionlint 1.7.12.
+      - 'specifying action "\$/android-signer/runtime" in invalid format'
   .github/workflows/publish-maven.yml:
     ignore:
       # GitHub.com documents job.workflow_sha, but actionlint 1.7.12 predates it.
