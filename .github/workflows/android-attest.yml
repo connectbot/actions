@@ -12,13 +12,14 @@ jobs:
   attest-unsigned:
     name: Attest unsigned ${{ inputs.profile }}
     if: ${{ github.event_name == 'push' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       actions: read
       id-token: write
       attestations: write
     steps:
+      - uses: $/android-signer/runtime
       - name: Validate artifact profile
         env:
           PROFILE: ${{ inputs.profile }}
