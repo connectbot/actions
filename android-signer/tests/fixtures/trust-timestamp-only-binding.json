@@ -1,0 +1,12 @@
+{
+  "authority": {
+    "authority": "sigstore-public",
+    "bootstrap_sha256": "73747011d0857ada15479a16c4cae0f3ed03aac698b523b97e1de314ac9d9ca8",
+    "epoch": "1f0cdea66527502e6d73f338da7ffcbf661bd1a8b09cc2710d841f33cf12b119",
+    "target": "trusted_root.json"
+  },
+  "checkpoint_sha256": "3d4a759b87e92b7c587f24afc02ed6f3a5286e87360fccfb795c301067775bad",
+  "generation": 20,
+  "target_sha256": "6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66",
+  "valid_until": 1793172895
+}

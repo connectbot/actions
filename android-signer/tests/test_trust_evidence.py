@@ -18,6 +18,21 @@ class TrustEvidenceTests(unittest.TestCase):
     def test_offline_evidence_matches_rust_binding(self):
         self.assertEqual(verifier.verify(self.raw, {'trust':self.binding}, self.checkpoint['authority']), self.binding)
 
+    def test_timestamp_only_refresh_preserves_authenticated_targets(self):
+        raw = (ROOT / 'tests/fixtures/trust-timestamp-only-checkpoint.json').read_bytes()
+        checkpoint = json.loads(raw)
+        binding = json.loads((ROOT / 'tests/fixtures/trust-timestamp-only-binding.json').read_bytes())
+        self.assertEqual(checkpoint['observations'][-1]['name'], 'timestamp.json')
+        self.assertEqual(verifier.verify(raw, {'trust': binding}, checkpoint['authority']), binding)
+
+    def test_snapshot_refresh_still_requires_targets_to_be_reauthenticated(self):
+        checkpoint = json.loads((ROOT / 'tests/fixtures/trust-timestamp-only-checkpoint.json').read_bytes())
+        snapshot = copy.deepcopy(next(o for o in checkpoint['observations'] if o['name'] == 'snapshot.json'))
+        snapshot['verified_at'] = checkpoint['verified_at']
+        checkpoint['observations'].append(snapshot)
+        with self.assertRaisesRegex(ValueError, 'incomplete targets authorization'):
+            verifier.verify(json.dumps(checkpoint).encode(), {'trust': {}}, checkpoint['authority'])
+
     def test_publication_requires_provenance_to_use_the_authenticated_target(self):
         spec=importlib.util.spec_from_file_location('trust_release',ROOT/'scripts/signer-release.py')
         helper=importlib.util.module_from_spec(spec)
