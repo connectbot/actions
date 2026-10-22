@@ -105,6 +105,8 @@ class HandoffTests(unittest.TestCase):
             files.update({f"{prefix}.{ext}": b"verified " + ext.encode() for ext in ("apk", "aab", "mapping.txt.zst", "native-debug-symbols.zip")})
             files[f"provenance-{profile}.json"] = b"{}"
             files.update({f"{profile}-{name}": b"public evidence" for name in ("signing-receipt.dsse.json", "signing-receipt.json", "code_transparency_signed.jwt", "transparency-certificate.der", "apk-lineage.bin")})
+            if self.policy["version"] == 4:
+                files[f"{profile}-trust-evidence.json"] = b"public trust evidence"
         if not self.manifest["release"]["prerelease"]:
             files["version-info.txt"] = b"VERSION_NAME=1.0.0\nVERSION_CODE=101\n"
         for file in self.handoff.iterdir():
@@ -136,6 +138,34 @@ class HandoffTests(unittest.TestCase):
 
     def test_complete_handoff(self):
         self.assertEqual(self.verify(), self.manifest)
+
+    def test_dynamic_trust_handoff_accepts_both_profiles_evidence(self):
+        self.policy["version"] = 4
+        self.policy_path.write_bytes(p.json_bytes(self.policy))
+        self.populate()
+        self.assertEqual(self.verify(), self.manifest)
+
+    def test_dynamic_trust_handoff_requires_each_profiles_evidence(self):
+        self.policy["version"] = 4
+        self.policy_path.write_bytes(p.json_bytes(self.policy))
+        for profile in ("oss", "google"):
+            with self.subTest(profile=profile):
+                self.populate()
+                name = f"{profile}-trust-evidence.json"
+                (self.handoff / name).unlink()
+                self.manifest["assets"].pop(name)
+                self.refresh()
+                with self.assertRaisesRegex(ValueError, "release asset set differs from policy"):
+                    self.verify()
+
+    def test_legacy_handoff_rejects_unexpected_trust_evidence(self):
+        name = "oss-trust-evidence.json"
+        data = b"unexpected trust evidence"
+        (self.handoff / name).write_bytes(data)
+        self.manifest["assets"][name] = {"sha256": p.digest(data), "bytes": len(data)}
+        self.refresh()
+        with self.assertRaisesRegex(ValueError, "release asset set differs from policy"):
+            self.verify()
 
     def test_retry_failed_publisher_accepts_same_run_prior_producer_attempt(self):
         self.verify({**self.env, "GITHUB_RUN_ATTEMPT": "2"})

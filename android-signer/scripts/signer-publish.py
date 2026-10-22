@@ -256,6 +256,8 @@ def verify_handoff(root, expected_hash, policy_path):
         required.update({f"{prefix}.apk", f"{prefix}.aab", f"{prefix}.mapping.txt.zst", f"{prefix}.native-debug-symbols.zip",
             f"provenance-{profile}.json", f"{profile}-signing-receipt.dsse.json", f"{profile}-signing-receipt.json",
             f"{profile}-code_transparency_signed.jwt", f"{profile}-transparency-certificate.der", f"{profile}-apk-lineage.bin"})
+        if policy["version"] == 4:
+            required.add(f"{profile}-trust-evidence.json")
         if policy["profiles"][profile]["keys"].get("hybrid"):
             required.update(f"{profile}-{name}" for name in ("apk-hybrid-rsa-lineage.bin", "apk-hybrid-pqc-lineage.bin", "apk-effective-lineage.bin"))
     if stable:
