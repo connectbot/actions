@@ -65,11 +65,13 @@ def verify(data, receipt, authority):
                 root = raw
                 role_bytes.clear()
         elif name == 'timestamp.json':
-            previous_snapshot = trusted.get('snapshot')
+            # python-tuf permits timestamp updates only before loading a snapshot.
+            # Detach descendants temporarily: a timestamp-only refresh still uses
+            # the authenticated snapshot and targets from the previous refresh.
+            descendants = {k: v for k, v in trusted._trusted_set.items() if k not in ('root', 'timestamp')}
             trusted._trusted_set = {k: v for k, v in trusted._trusted_set.items() if k in ('root', 'timestamp')}
             trusted.update_timestamp(raw)
-            if previous_snapshot is not None:
-                trusted._trusted_set['snapshot'] = previous_snapshot
+            trusted._trusted_set.update(descendants)
         elif name == 'snapshot.json':
             trusted._trusted_set = {k: v for k, v in trusted._trusted_set.items() if k in ('root', 'timestamp', 'snapshot')}
             trusted.update_snapshot(raw)
@@ -97,6 +99,7 @@ def verify(data, receipt, authority):
     trusted._check_final_timestamp()
     trusted._check_final_snapshot()
     require(not trusted.root.is_expired(moment), 'expired root')
+    require(trusted.get('targets') is not None, 'incomplete targets authorization')
     require(trusted.snapshot.meta['targets.json'].version == trusted.targets.version, 'incomplete targets authorization')
     queue = [('targets', 'root')]
     seen = set()
