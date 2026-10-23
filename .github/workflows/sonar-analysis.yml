@@ -27,7 +27,7 @@ jobs:
   analyze:
     name: Analyze prebuilt sources
     if: github.event_name == 'workflow_run'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
       SONAR_PRODUCER_WORKFLOW: ${{ inputs.producer_workflow }}
