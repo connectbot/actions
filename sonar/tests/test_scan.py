@@ -310,6 +310,37 @@ class FilesTest(unittest.TestCase):
         path.write_text('<coverage><sources><source>.github/scripts</source></sources><class filename="a.py"/></coverage>')
         scan.normalize_report(path)
 
+    def test_rust_lcov_artifact_and_settings(self):
+        archive = self.archive([("reports/rust.lcov", b"SF:src/lib.rs\nDA:1,1\nend_of_record\n")])
+        inputs = self.root / "inputs"
+        scan.unpack(archive, inputs)
+        scan.normalize_lcov(inputs / "reports/rust.lcov")
+        source = self.root / "source"
+        (source / "src").mkdir(parents=True)
+        (source / "test").mkdir()
+        config = self.config()
+        config["artifact_paths"] = {"sonar.rust.lcov.reportPaths": ["reports/rust.lcov"]}
+        config_path = self.root / "config.json"
+        config_path.write_text(json.dumps(config))
+        settings = scan.settings(scan.load_config(config_path), {"sha": SHA, "branch": "main"},
+                                 source, inputs, self.root).read_text()
+        self.assertIn("sonar.rust.lcov.reportPaths=" + str(inputs / "reports/rust.lcov"), settings)
+        self.assertIn("sonar.rust.clippy.enabled=false", settings)
+
+    def test_rust_lcov_rejects_hostile_and_incomplete_sources(self):
+        path = self.root / "rust.lcov"
+        for source in ("/etc/passwd", "../secret.rs", "src/../../secret.rs", "src\\evil.rs",
+                       "${env.SONAR_TOKEN}.rs", "src/a,b.rs", "src/x\x00.rs", "src/main.py"):
+            with self.subTest(source=source), self.assertRaises(scan.Invalid):
+                path.write_text(f"SF:{source}\nDA:1,1\nend_of_record\n")
+                scan.normalize_lcov(path)
+        for text in ("", "SF:src/lib.rs\nDA:1,1\n", "DA:1,1\nend_of_record\n",
+                     "SF:src/lib.rs\nSF:src/main.rs\nend_of_record\n",
+                     "SF:src/lib.rs\nINCLUDE:/etc/passwd\nend_of_record\n"):
+            with self.subTest(text=text), self.assertRaises(scan.Invalid):
+                path.write_text(text)
+                scan.normalize_lcov(path)
+
     def test_hostile_reports(self):
         for data in ('<!DOCTYPE x [<!ENTITY x SYSTEM "file:///proc/self/environ">]><report>&x;</report>',
                      '<report><class sourcefilename="../../secret"/></report>',
@@ -328,7 +359,8 @@ class FilesTest(unittest.TestCase):
 
     def test_config_rejects_executable_transport_and_auth_overrides(self):
         for key in ("sonar.host.url", "sonar.token", "sonar.scanner.javaExePath", "sonar.projectBaseDir",
-                    "sonar.java.jdkHome", "sonar.scanner.dumpToFile", "project.settings"):
+                    "sonar.java.jdkHome", "sonar.scanner.dumpToFile", "project.settings",
+                    "sonar.rust.clippy.enabled", "sonar.rust.cargo.manifestPaths"):
             config = self.config()
             config["properties"][key] = "attacker"
             path = self.root / "config.json"

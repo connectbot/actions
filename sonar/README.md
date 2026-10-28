@@ -6,7 +6,7 @@ this reusable workflow on a fresh GitHub-hosted runner. Only the standalone scan
 receives the token. No project build scripts or artifact executables run there.
 
 Version one supports public GitHub repositories, SonarCloud's `sonarcloud.io`
-region, and prebuilt JVM/Python projects. Other language build integrations,
+region, and prebuilt JVM/Python/Rust projects. Other language build integrations,
 private source repositories, merge queues, and SonarQube Server are not supported.
 
 ## Consumer workflow
@@ -53,7 +53,7 @@ relative to a staging directory containing only:
 
 - `classes/`: compiled main/test `.class` files, arranged by module and source set.
 - `libraries/`: main/test dependency `.jar` files, arranged by module and source set.
-- `reports/`: JaCoCo-compatible and/or Python coverage `.xml` reports.
+- `reports/`: JaCoCo-compatible and/or Python coverage `.xml` reports, and Rust `.lcov` reports.
 
 Directories are allowed. Symlinks, special files, executables, scanner settings,
 and other extensions are rejected. Names must be normalized relative paths,
@@ -105,7 +105,11 @@ from the PR or artifact. Configuration changes therefore take effect after mergi
 
 Omit irrelevant optional mappings, rather than supplying empty lists. Every
 configured artifact pattern must match. Python coverage uses
-`sonar.python.coverage.reportPaths` mapped under `reports/`. Source/test paths are
+`sonar.python.coverage.reportPaths` mapped under `reports/`. Rust LCOV uses
+`sonar.rust.lcov.reportPaths` mapped under `reports/`; each `SF:` path must be a
+normalized repository-relative Rust source path. Automatic Clippy execution is
+always disabled because it can execute PR-controlled build scripts. Run Clippy
+separately in the credential-free producer. Source/test paths are
 comma-separated repository-relative paths, not globs. `properties` allows source
 and test inclusions/exclusions, coverage/duplication exclusions, source versions,
 project display name, encoding, and issue-ignore criteria; `scan.py`'s `PROPERTIES`

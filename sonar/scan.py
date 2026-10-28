@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Analyze prebuilt, untrusted JVM/Python projects without executing project code."""
+"""Analyze prebuilt, untrusted JVM/Python/Rust projects without executing project code."""
 
 import argparse
 import hashlib
@@ -41,6 +41,7 @@ ARTIFACT_PATHS = {
     "sonar.java.test.libraries": "libraries/",
     "sonar.coverage.jacoco.xmlReportPaths": "reports/",
     "sonar.python.coverage.reportPaths": "reports/",
+    "sonar.rust.lcov.reportPaths": "reports/",
 }
 
 
@@ -224,12 +225,34 @@ def unpack(archive, destination):
                 continue
             require((root == "classes" and name.endswith(".class"))
                     or (root == "libraries" and name.endswith(".jar"))
-                    or (root == "reports" and name.endswith(".xml")), "Unexpected artifact file")
+                    or (root == "reports" and name.endswith((".xml", ".lcov"))), "Unexpected artifact file")
             target = destination / name
             target.parent.mkdir(parents=True, exist_ok=True)
             with bundle.open(item) as source, target.open("xb") as output:
                 shutil.copyfileobj(source, output)
             target.chmod(0o600)
+
+
+def normalize_lcov(path):
+    """Require repository-relative Rust source paths before passing LCOV to Sonar."""
+    records = 0
+    in_record = False
+    for line in path.read_text().splitlines():
+        require(not any(ord(c) < 32 or ord(c) == 127 for c in line), "Unsafe LCOV characters")
+        if line.startswith("SF:"):
+            require(not in_record, "Unterminated LCOV record")
+            relative(line[3:])
+            require(line.endswith(".rs"), "Expected Rust LCOV source")
+            in_record = True
+            records += 1
+        elif line == "end_of_record":
+            require(in_record, "Unexpected LCOV record end")
+            in_record = False
+        elif line:
+            require(bool(re.fullmatch(r"(?:TN|FN|FNDA|FNF|FNH|DA|LF|LH|BRDA|BRF|BRH):.*", line)),
+                    "Unsupported LCOV field")
+            require(in_record or line.startswith("TN:"), "LCOV data outside a record")
+    require(records > 0 and not in_record, "Missing or incomplete LCOV records")
 
 
 def normalize_report(path):
@@ -349,6 +372,8 @@ def settings(config, context, source, inputs, root):
         "sonar.qualitygate.timeout": "300", "sonar.scanner.skipJreProvisioning": "true",
         "sonar.working.directory": str(root / "scanner-work"),
         "sonar.scanner.metadataFilePath": str(root / "report-task.txt"),
+        # Clippy can execute PR-controlled build.rs scripts. Never run it with the token.
+        "sonar.rust.clippy.enabled": "false",
     })
     if "pr" in context:
         properties.update({"sonar.pullrequest.key": str(context["pr"]),
@@ -387,6 +412,8 @@ def prepare(root, api, event, workflow, prefix, config_path):
     unpack(archive, inputs)
     for report in (inputs / "reports").rglob("*.xml"):
         normalize_report(report)
+    for report in (inputs / "reports").rglob("*.lcov"):
+        normalize_lcov(report)
     source = checkout_source(root, api.repository, context)
     settings(config, context, source, inputs, root)
     install_scanner(root)
