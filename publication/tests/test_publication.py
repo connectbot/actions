@@ -289,6 +289,24 @@ class PublicationTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "rejected"):
                 p.publish_release(self.root, self.version, self.work)
 
+    def test_release_deployment_name_uses_calling_repository(self):
+        self.release_context()
+        for repository, name in (("connectbot/cbzmodem", "cbzmodem-1.2.3"),
+                                 ("connectbot/cbtelnet", "cbtelnet-1.2.3"),
+                                 ("connectbot/cbssh", "cbssh-1.2.3")):
+            with self.subTest(repository=repository), \
+                    patch.object(p, "REPOSITORY", repository), \
+                    patch.object(p, "check_remote", side_effect=[False, True]), \
+                    patch.object(p, "run", return_value=subprocess.CompletedProcess([], 0, "12345678-1234-1234-1234-123456789abc")) as upload, \
+                    patch.dict(os.environ, SONATYPE_USERNAME="user", SONATYPE_PASSWORD="secret"), \
+                    patch.object(p, "request", return_value=b'{"deploymentState":"PUBLISHED"}'):
+                p.publish_release(self.root, self.version, self.work)
+                upload.assert_called_once()
+                self.assertEqual(
+                    upload.call_args.args[-1],
+                    f"{p.CENTRAL}/api/v1/publisher/upload?publishingType=AUTOMATIC&name={name}",
+                )
+
     def test_redirects_are_rejected(self):
         with self.assertRaises(ValueError):
             p.NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://attacker.invalid")
