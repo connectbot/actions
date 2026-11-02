@@ -239,11 +239,12 @@ def publish_release(root, version, work):
         f"{os.environ['SONATYPE_USERNAME']}:{os.environ['SONATYPE_PASSWORD']}".encode()
     ).decode()
     headers = {"Authorization": f"Bearer {token}"}
+    deployment_name = f"{REPOSITORY.rsplit('/', 1)[-1]}-{version}"
     # curl reads credentials from stdin rather than exposing them in the process arguments.
     result = run(
         "curl", "--fail", "--silent", "--show-error", "--proto", "=https", "--config", "-",
         "--form", f"bundle=@{archive}",
-        f"{CENTRAL}/api/v1/publisher/upload?publishingType=AUTOMATIC&name=cbssh-{version}",
+        f"{CENTRAL}/api/v1/publisher/upload?publishingType=AUTOMATIC&name={deployment_name}",
         input=f'header = "Authorization: Bearer {token}"\n', capture_output=True,
     )
     deployment = result.stdout.strip()
