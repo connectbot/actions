@@ -36,6 +36,16 @@
       "depNameTemplate": "sonar-scanner-cli",
       "datasourceTemplate": "custom.sonar-scanner",
       "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github\\/workflows\\/.*\\.ya?ml$/"
+      ],
+      "matchStrings": [
+        "gh extension install (?<depName>[\\w.-]+/[\\w.-]+) --pin (?<currentValue>[^\\s\"']+)"
+      ],
+      "datasourceTemplate": "github-releases"
     }
   ],
   "customDatasources": {
