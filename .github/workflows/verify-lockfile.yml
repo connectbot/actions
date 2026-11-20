@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Actions lockfile verifier
-        run: gh extension install github/gh-actions-lock --pin v0.4.1
+        run: gh extension install github/gh-actions-lock --pin v0.5.1
 
       # Fail if workflow coverage is incomplete or a locked pin no longer verifies upstream.
       - name: Verify Actions lockfile
